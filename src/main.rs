@@ -2,11 +2,12 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 fn main() -> io::Result<()> {
     let filename = "material/large/training.mrg"; 
     let path = Path::new(filename);
-    let mut grammar_rules: HashMap<String, i32> = HashMap::new();
+    let mut grammar_rules: HashMap<String, u64> = HashMap::new();
 
     if !path.exists() {
         eprintln!("Error: File '{}' not found.", filename);
@@ -47,7 +48,7 @@ fn main() -> io::Result<()> {
 
                                 let rule_text = innermost_content.replacen(' ', " -> ", 1);
 
-                                *grammar_rules.entry(rule_text.clone()).or_insert(0) += occurrence_count as i32;
+                                *grammar_rules.entry(rule_text.clone()).or_insert(0) += occurrence_count as u64;
 
                             } else {
                                 eprintln!("INTERNAL ERROR (Line {}): Could not find '{}' in '{}', although it was detected?", line_num + 1, search_pattern, line_structure);
@@ -74,24 +75,103 @@ fn main() -> io::Result<()> {
         }
     }
 
-    // println!("All lines processed. Writing grammar rules...");
-
-    let mut sorted_rules: Vec<_> = grammar_rules.iter().collect();
-
-    // Sort by key (the rule string)
-    sorted_rules.sort_by_key(|(k, _)| *k);
-
-    let output_filename = "grammar.rules"; 
-    let output_file = File::create(output_filename)?;
-    let mut writer = BufWriter::new(output_file);
-
-    for (rule, count) in sorted_rules {
-        writeln!(writer, "{} {}", rule, count)?;
+    // 1. Calculate the total count for each left-hand side non-terminal (LHS)
+    let mut lhs_totals: HashMap<String, u64> = HashMap::new();
+    for (rule, count) in &grammar_rules {
+        if let Some((lhs, _)) = rule.split_once(" -> ") {
+            *lhs_totals.entry(lhs.to_string()).or_insert(0) += count;
+        }
     }
 
-    writer.flush()?;
+    write_grammar_files(&grammar_rules, &lhs_totals)?;
+    Ok(())
+}
 
-    // println!("Grammar rules successfully written to '{}'.", output_filename);
+fn write_grammar_files(
+    grammar_rules: &HashMap<String, u64>,
+    lhs_totals: &HashMap<String, u64>,
+) -> io::Result<()> {
+    let mut all_lhs_strings: HashSet<&str> = HashSet::new();
+    for rule_string in grammar_rules.keys() {
+        if let Some((lhs, _)) = rule_string.split_once(" -> ") {
+            all_lhs_strings.insert(lhs.trim()); 
+        }
+    }
+
+    // --- Sorting Step ---
+    let mut sorted_rules: Vec<_> = grammar_rules.iter().collect();
+
+    sorted_rules.sort_by_key(|(rule_key, _)| *rule_key);
+
+    // --- File Setup Step ---
+    let rules_output_filename = "grammar.rules";
+    let lexicon_output_filename = "grammar.lexicon";
+    let words_output_filename = "grammar.words";
+
+    let rules_output_file = File::create(rules_output_filename)?;
+    let mut rules_writer = BufWriter::new(rules_output_file);
+
+    let lexicon_output_file = File::create(lexicon_output_filename)?;
+    let mut lexicon_writer = BufWriter::new(lexicon_output_file);
+
+    let words_output_file = File::create(words_output_filename)?;
+    let mut words_writer = BufWriter::new(words_output_file);
+
+    let mut unique_words_for_output: HashSet<String> = HashSet::new();
+
+    // --- Processing and Writing Loop ---
+    for (rule, count) in sorted_rules {
+        if let Some((lhs, rhs)) = rule.split_once(" -> ") {
+            let lhs_trimmed = lhs.trim();
+            let rhs_trimmed = rhs.trim();
+
+            if let Some(total_count) = lhs_totals.get(lhs_trimmed) {
+                let relative_frequency = if *total_count > 0 {
+                    *count as f64 / *total_count as f64
+                } else {
+                    eprintln!(
+                        "Warning: Total count for LHS '{}' was zero for rule '{}'. Setting frequency to 0.0.",
+                        lhs_trimmed, rule
+                    );
+                    0.0
+                };
+
+                let output_line = format!("{} {}", rule, relative_frequency);
+
+                // --- Decision Logic: grammar.rules vs grammar.lexicon ---
+                let rhs_components: Vec<&str> = rhs_trimmed.split_whitespace().collect();
+
+                if rhs_components.len() == 1 {
+                    let single_rhs_element = rhs_components[0];
+
+                    if all_lhs_strings.contains(single_rhs_element) {
+                        writeln!(rules_writer, "{}", output_line)?;
+                    } else {
+                        writeln!(lexicon_writer, "{}", output_line)?;
+                        if unique_words_for_output.insert(single_rhs_element.to_string()) {
+                            writeln!(words_writer, "{}", single_rhs_element)?;
+                        }
+                    }
+                } else {
+                    writeln!(rules_writer, "{}", output_line)?;
+                }
+            } else {
+                eprintln!(
+                    "Internal error: Could not find total count for LHS '{}' from rule '{}'. Skipping rule.",
+                    lhs_trimmed, rule
+                );
+            }
+        } else {
+            eprintln!(
+                "Warning: Rule format incorrect, skipping output: {}",
+                rule
+            );
+        }
+    }
+
+    rules_writer.flush()?;
+    lexicon_writer.flush()?;
+    words_writer.flush()?;
 
     Ok(())
 }

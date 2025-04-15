@@ -2,3 +2,5 @@
 /material
 .qodo
 grammar.rules
+grammar.lexicon
+grammar.words
