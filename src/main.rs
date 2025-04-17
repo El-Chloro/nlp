@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 use std::collections::HashMap;
@@ -278,3 +278,215 @@ fn find_innermost_parentheses(s: &str) -> Option<&str> {
 // "NP -> Hello": 1
 // "NN -> DT NP": 1
 // "ROOT -> NP NN": 1 // Note: The original German comments were slightly different for this example output.
+
+
+// --- Test Module ---
+#[cfg(test)]
+mod tests {
+    use super::*; 
+    use std::io::Read; 
+    use tempfile::tempdir; 
+
+    // --- Tests for find_innermost_parentheses ---
+
+    #[test]
+    fn find_innermost_simple() {
+        assert_eq!(find_innermost_parentheses("(A (B C))"), Some("B C"));
+    }
+
+    #[test]
+    fn find_innermost_deep() {
+        assert_eq!(find_innermost_parentheses("(A (B (C D)))"), Some("C D"));
+    }
+
+    #[test]
+    fn find_innermost_multiple() {
+        assert_eq!(find_innermost_parentheses("(A (B C) (D E))"), Some("B C"));
+    }
+
+     #[test]
+    fn find_innermost_adjacent() {
+        assert_eq!(find_innermost_parentheses("((A B) (C D))"), Some("A B"));
+    }
+
+    #[test]
+    fn find_innermost_no_parentheses() {
+        assert_eq!(find_innermost_parentheses("A B C"), None);
+    }
+
+    #[test]
+    fn find_innermost_empty_string() {
+        assert_eq!(find_innermost_parentheses(""), None);
+    }
+
+    #[test]
+    fn find_innermost_empty_content() {
+        assert_eq!(find_innermost_parentheses("()"), Some(""));
+    }
+
+     #[test]
+    fn find_innermost_outer_only() {
+        assert_eq!(find_innermost_parentheses("(A B C)"), Some("A B C"));
+    }
+
+    #[test]
+    fn find_innermost_with_spaces() {
+        assert_eq!(find_innermost_parentheses(" ( A ( B C ) ) "), Some(" B C "));
+    }
+
+    #[test]
+    fn find_innermost_complex() {
+        let complex = "(ROOT (S (NP (DT The) (NN dog)) (VP (VBD chased) (NP (DT a) (NN cat)))))";
+        // Innermost are (DT The), (NN dog), (DT a), (NN cat)
+        // The function should find the first one: (DT The)
+        assert_eq!(find_innermost_parentheses(complex), Some("DT The"));
+    }
+
+     #[test]
+    fn find_innermost_single_word_content() {
+        assert_eq!(find_innermost_parentheses("(NN dog)"), Some("NN dog"));
+    }
+
+     #[test]
+    fn find_innermost_unbalanced_start() {
+        assert_eq!(find_innermost_parentheses("(A (B C"), None);
+    }
+
+     #[test]
+    fn find_innermost_unbalanced_end() {
+        assert_eq!(find_innermost_parentheses("A B C))"), None); 
+    }
+
+
+    // --- Tests for first_word_with_space ---
+
+    #[test]
+    fn first_word_basic() {
+        assert_eq!(first_word_with_space("NP VP S"), Some("NP"));
+    }
+
+    #[test]
+    fn first_word_single() {
+        assert_eq!(first_word_with_space("NP"), Some("NP"));
+    }
+
+    #[test]
+    fn first_word_leading_space() {
+        assert_eq!(first_word_with_space("  NP VP"), Some("NP"));
+    }
+
+     #[test]
+    fn first_word_multiple_spaces() {
+        assert_eq!(first_word_with_space("NP  VP   S"), Some("NP"));
+    }
+
+
+    #[test]
+    fn first_word_empty() {
+        assert_eq!(first_word_with_space(""), None);
+    }
+
+    #[test]
+    fn first_word_only_spaces() {
+        assert_eq!(first_word_with_space("   "), None);
+    }
+
+
+   // --- Tests for write_grammar_files ---
+
+   #[test]
+   fn write_files_basic_separation() -> io::Result<()> {
+       let dir = tempdir()?; 
+       let current_dir = std::env::current_dir()?;
+       std::env::set_current_dir(dir.path())?;
+
+       let mut grammar_rules: HashMap<String, u64> = HashMap::new();
+       grammar_rules.insert("S -> NP VP".to_string(), 10); 
+       grammar_rules.insert("NP -> DT NN".to_string(), 8);  
+       grammar_rules.insert("NP -> NNP".to_string(), 2);    
+       grammar_rules.insert("VP -> V NP".to_string(), 9);   
+       grammar_rules.insert("DT -> the".to_string(), 5);    
+       grammar_rules.insert("NN -> dog".to_string(), 3);    
+       grammar_rules.insert("NN -> cat".to_string(), 3);   
+       grammar_rules.insert("V -> chased".to_string(), 9);  
+       grammar_rules.insert("NNP -> Peter".to_string(), 2); 
+
+       let mut lhs_totals: HashMap<String, u64> = HashMap::new();
+       lhs_totals.insert("S".to_string(), 10);
+       lhs_totals.insert("NP".to_string(), 10);
+       lhs_totals.insert("VP".to_string(), 9);
+       lhs_totals.insert("DT".to_string(), 5);
+       lhs_totals.insert("NN".to_string(), 6); 
+       lhs_totals.insert("V".to_string(), 9);
+       lhs_totals.insert("NNP".to_string(), 2);
+
+       write_grammar_files(&grammar_rules, &lhs_totals)?;
+
+
+       let rules_content = fs::read_to_string("grammar.rules")?;
+       let lexicon_content = fs::read_to_string("grammar.lexicon")?;
+       let words_content = fs::read_to_string("grammar.words")?;
+
+
+       let expected_rules = [
+           "NP -> DT NN 0.8", 
+           "NP -> NNP 0.2",   
+           "S -> NP VP 1",    
+           "VP -> V NP 1",    
+       ].join("\n") + "\n"; 
+
+       let expected_lexicon = [
+           "DT -> the 1",     
+           "NN -> cat 0.5",   
+           "NN -> dog 0.5",   
+           "NNP -> Peter 1",  
+           "V -> chased 1",   
+       ].join("\n") + "\n";
+
+       let expected_words = [ 
+           "Peter",
+           "cat",
+           "chased",
+           "dog",
+           "the",
+       ];
+       let mut actual_words: Vec<String> = words_content.lines().map(String::from).collect();
+       actual_words.sort(); 
+       let mut sorted_expected_words = expected_words.to_vec();
+       sorted_expected_words.sort(); 
+
+
+       assert_eq!(rules_content, expected_rules);
+       assert_eq!(lexicon_content, expected_lexicon);
+       assert_eq!(actual_words.join("\n"), sorted_expected_words.join("\n")); 
+
+
+       std::env::set_current_dir(current_dir)?;
+       dir.close()?; 
+       Ok(())
+   }
+
+    #[test]
+    fn write_files_zero_total_count() -> io::Result<()> {
+        let dir = tempdir()?;
+        let current_dir = std::env::current_dir()?;
+        std::env::set_current_dir(dir.path())?;
+
+        let mut grammar_rules: HashMap<String, u64> = HashMap::new();
+        grammar_rules.insert("S -> NP VP".to_string(), 0); 
+
+        let mut lhs_totals: HashMap<String, u64> = HashMap::new();
+        lhs_totals.insert("S".to_string(), 0);
+
+        write_grammar_files(&grammar_rules, &lhs_totals)?;
+
+        let rules_content = fs::read_to_string("grammar.rules")?;
+        let expected_rules = "S -> NP VP 0\n"; 
+
+        assert_eq!(rules_content, expected_rules);
+
+        std::env::set_current_dir(current_dir)?;
+        dir.close()?;
+        Ok(())
+    }
+} // End of the test module
