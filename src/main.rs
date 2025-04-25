@@ -321,7 +321,7 @@ fn write_rule_line_arrow_format<W: Write>(
             } else {
                 0.0
             };
-            let output_line = format!("{} {:.6}", rule, relative_frequency);
+            let output_line = format!("{} {}", rule, relative_frequency);
             writeln!(writer, "{}", output_line)?;
         } 
     } 
