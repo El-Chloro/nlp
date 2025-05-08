@@ -1,4 +1,4 @@
-use crate::structs::{Node, ParseError}; 
+use crate::structs::Node; 
 use crate::parser::parse_tree;
 use crate::rules::extract_rules;
 use crate::output::write_pcfg_output;
@@ -6,6 +6,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write}; 
 use tempfile::tempdir;
+use crate::grammar::{load_grammar, Grammar, LexicalRule, BinaryRule, UnaryRule};
+use crate::cyk::parse_sentence; 
+use std::path::PathBuf;
 
 // --- Tests for parse_tree---
 
@@ -335,4 +338,225 @@ fn write_output_zero_total_count_tree() -> io::Result<()> {
 
     dir.close()?;
     Ok(())
+}
+
+// --- Tests for grammar loading ---
+
+fn create_test_grammar_files(dir: &tempfile::TempDir, rules_content: &str, lexicon_content: &str) -> io::Result<(PathBuf, PathBuf)> {
+    let rules_path = dir.path().join("test.rules");
+    let lexicon_path = dir.path().join("test.lexicon");
+    fs::write(&rules_path, rules_content)?;
+    fs::write(&lexicon_path, lexicon_content)?;
+    Ok((rules_path, lexicon_path))
+}
+
+#[test]
+fn load_grammar_simple_valid() -> io::Result<()> {
+    let dir = tempdir()?;
+    let rules_content = "ROOT -> S 1.0\nS -> NP VP 0.9\nNP -> DT NN 0.7\nVP -> V NP 0.8\nVP -> V 0.1\nNN -> NNP 0.1";
+    let lexicon_content = "DT the 1.0\nNN dog 0.5\nNN cat 0.3\nNNP Max 1.0\nV chased 0.9\nV ran 0.1";
+    let (rules_path, lexicon_path) = create_test_grammar_files(&dir, rules_content, lexicon_content)?;
+
+    let grammar = load_grammar(&rules_path, &lexicon_path)?;
+
+    assert!(grammar.non_terminals.contains("ROOT"));
+    assert!(grammar.non_terminals.contains("S"));
+    assert!(grammar.non_terminals.contains("NP"));
+    assert!(grammar.non_terminals.contains("VP"));
+    assert!(grammar.non_terminals.contains("DT"));
+    assert!(grammar.non_terminals.contains("NN"));
+    assert!(grammar.non_terminals.contains("NNP"));
+    assert!(grammar.non_terminals.contains("V"));
+    assert_eq!(grammar.non_terminals.len(), 8);
+
+    assert!(grammar.terminals.contains("the"));
+    assert!(grammar.terminals.contains("dog"));
+    assert!(grammar.terminals.contains("cat"));
+    assert!(grammar.terminals.contains("Max"));
+    assert!(grammar.terminals.contains("chased"));
+    assert!(grammar.terminals.contains("ran"));
+    assert_eq!(grammar.terminals.len(), 6);
+
+    assert_eq!(grammar.start_symbol, "ROOT");
+
+    let dt_rules = grammar.lexical_rules_by_rhs.get("the").unwrap();
+    assert_eq!(dt_rules.len(), 1);
+    assert_eq!(dt_rules[0].lhs, "DT");
+
+    let s_rules = grammar.binary_rules_by_children.get(&("NP".to_string(), "VP".to_string())).unwrap();
+    assert_eq!(s_rules.len(), 1);
+    assert_eq!(s_rules[0].lhs, "S");
+    assert_eq!(s_rules[0].probability, 0.9);
+
+    let unary_nn_rules = grammar.unary_rules_by_rhs.get("NNP").unwrap();
+    assert_eq!(unary_nn_rules.len(), 1);
+    assert_eq!(unary_nn_rules[0].lhs, "NN");
+    assert_eq!(unary_nn_rules[0].probability, 0.1);
+
+    Ok(())
+}
+
+#[test]
+fn load_grammar_malformed_prob() -> io::Result<()> {
+    let dir = tempdir()?;
+    let rules_content = "S -> NP VP 1.0";
+    let lexicon_content = "DT the not_a_number";
+    let (rules_path, lexicon_path) = create_test_grammar_files(&dir, rules_content, lexicon_content)?;
+
+    let result = load_grammar(&rules_path, &lexicon_path);
+    assert!(result.is_err());
+    Ok(())
+}
+
+#[test]
+fn load_grammar_malformed_rule_format() -> io::Result<()> {
+    let dir = tempdir()?;
+    let rules_content = "S NP VP 1.0\nROOT -> S 0.8\nS -> X Y 0.2";
+    let lexicon_content = "DT the 1.0\nX x_term 1.0\nY y_term 1.0";
+    let (rules_path, lexicon_path) = create_test_grammar_files(&dir, rules_content, lexicon_content)?;
+
+    let grammar = load_grammar(&rules_path, &lexicon_path)?;
+
+    assert_eq!(grammar.binary_rules_by_children.values().flatten().count(), 1, "Only S -> X Y should be a valid binary rule");
+    assert!(grammar.binary_rules_by_children.contains_key(&("X".to_string(), "Y".to_string())));
+
+    assert_eq!(grammar.unary_rules_by_lhs.values().flatten().count(), 1, "Only ROOT -> S should be a valid unary rule");
+    assert!(grammar.unary_rules_by_lhs.contains_key("ROOT"));
+
+
+    assert!(!grammar.lexical_rules_by_rhs.is_empty(), "Lexicon should be loaded");
+    assert!(grammar.lexical_rules_by_rhs.contains_key("the"));
+    assert!(grammar.lexical_rules_by_rhs.contains_key("x_term"));
+    assert!(grammar.lexical_rules_by_rhs.contains_key("y_term"));
+
+    assert!(grammar.non_terminals.contains("ROOT"));
+    assert!(grammar.non_terminals.contains("S"));
+    assert!(grammar.non_terminals.contains("X"));
+    assert!(grammar.non_terminals.contains("Y"));
+    assert!(grammar.non_terminals.contains("DT"));
+    assert!(!grammar.non_terminals.contains("NP"), "'NP' should not be added because the rule is invalid");
+    assert!(!grammar.non_terminals.contains("VP"), "'VP' should not be added because the rule is invalid");
+
+
+    assert_eq!(grammar.start_symbol, "ROOT", "Start symbol should be 'ROOT' from the valid rule");
+    Ok(())
+}
+
+// --- Tests for CYK parsing ---
+
+fn create_test_grammar() -> Grammar {
+     let mut grammar = Grammar {
+        non_terminals: HashSet::new(),
+        terminals: HashSet::new(),
+        start_symbol: "S".to_string(),
+        lexical_rules_by_rhs: HashMap::new(),
+        unary_rules_by_rhs: HashMap::new(),
+        binary_rules_by_children: HashMap::new(),
+        unary_rules_by_lhs: HashMap::new(),
+     };
+
+     for nt in ["S", "NP", "VP", "PP", "DT", "NN", "V", "P"].iter() {
+        grammar.non_terminals.insert(nt.to_string());
+     }
+      for t in ["the", "a", "man", "dog", "telescope", "saw", "with", "ran"].iter() {
+        grammar.terminals.insert(t.to_string());
+     }
+
+     let rules = vec![
+         LexicalRule { lhs: "DT".to_string(), rhs: "the".to_string(), probability: 1.0 },
+         LexicalRule { lhs: "DT".to_string(), rhs: "a".to_string(), probability: 1.0 },
+         LexicalRule { lhs: "NN".to_string(), rhs: "man".to_string(), probability: 1.0 },
+         LexicalRule { lhs: "NN".to_string(), rhs: "dog".to_string(), probability: 1.0 },
+         LexicalRule { lhs: "NN".to_string(), rhs: "telescope".to_string(), probability: 1.0 },
+         LexicalRule { lhs: "V".to_string(), rhs: "saw".to_string(), probability: 1.0 },
+         LexicalRule { lhs: "V".to_string(), rhs: "ran".to_string(), probability: 1.0 },
+         LexicalRule { lhs: "P".to_string(), rhs: "with".to_string(), probability: 1.0 },
+     ];
+     for rule in rules {
+         grammar.lexical_rules_by_rhs.entry(rule.rhs.clone()).or_default().push(rule);
+     }
+
+     let bin_rules = vec![
+         BinaryRule { lhs: "S".to_string(), rhs1: "NP".to_string(), rhs2: "VP".to_string(), probability: 1.0 },
+         BinaryRule { lhs: "NP".to_string(), rhs1: "DT".to_string(), rhs2: "NN".to_string(), probability: 1.0 },
+         BinaryRule { lhs: "VP".to_string(), rhs1: "V".to_string(), rhs2: "NP".to_string(), probability: 0.7 },
+         BinaryRule { lhs: "VP".to_string(), rhs1: "VP".to_string(), rhs2: "PP".to_string(), probability: 0.5 },
+         BinaryRule { lhs: "NP".to_string(), rhs1: "NP".to_string(), rhs2: "PP".to_string(), probability: 0.2 },
+         BinaryRule { lhs: "PP".to_string(), rhs1: "P".to_string(), rhs2: "NP".to_string(), probability: 1.0 },
+     ];
+     for rule in bin_rules {
+          grammar.binary_rules_by_children.entry((rule.rhs1.clone(), rule.rhs2.clone())).or_default().push(rule);
+     }
+
+     let unary_rules = vec![
+         UnaryRule { lhs: "VP".to_string(), rhs: "V".to_string(), probability: 0.1 }
+     ];
+      for rule in unary_rules {
+          grammar.unary_rules_by_rhs.entry(rule.rhs.clone()).or_default().push(rule.clone());
+          grammar.unary_rules_by_lhs.entry(rule.lhs.clone()).or_default().push(rule);
+      }
+     grammar
+}
+
+#[test]
+fn cyk_parse_simple_sentence() {
+    let mut simple_grammar = create_test_grammar();
+    simple_grammar.binary_rules_by_children.retain(|_, rules| {
+        rules.retain(|r| r.lhs != "VP" || r.rhs2 != "PP");
+        rules.retain(|r| r.lhs != "NP" || r.rhs2 != "PP");
+        !rules.is_empty()
+    });
+     simple_grammar.unary_rules_by_rhs.clear();
+     simple_grammar.unary_rules_by_lhs.clear();
+      let vp_v_rule = UnaryRule { lhs: "VP".to_string(), rhs: "V".to_string(), probability: 1.0 };
+      simple_grammar.unary_rules_by_rhs.entry("V".to_string()).or_default().push(vp_v_rule.clone());
+      simple_grammar.unary_rules_by_lhs.entry("VP".to_string()).or_default().push(vp_v_rule);
+
+    let sentence = vec!["the".to_string(), "dog".to_string(), "ran".to_string()];
+    let expected_tree = "(S (NP (DT the) (NN dog)) (VP (V ran)))";
+    let result_simple = parse_sentence(&simple_grammar, &sentence, "S");
+    assert_eq!(result_simple, expected_tree);
+}
+
+#[test]
+fn cyk_parse_longer_sentence_ambiguous() {
+     let grammar = create_test_grammar();
+     let sentence = vec!["the".to_string(), "man".to_string(), "saw".to_string(), "a".to_string(), "dog".to_string(), "with".to_string(), "a".to_string(), "telescope".to_string()];
+     let result = parse_sentence(&grammar, &sentence, "S");
+      let expected_tree_vp_attach = "(S (NP (DT the) (NN man)) (VP (VP (V saw) (NP (DT a) (NN dog))) (PP (P with) (NP (DT a) (NN telescope)))))";
+     assert_eq!(result, expected_tree_vp_attach);
+}
+
+
+#[test]
+fn cyk_parse_no_parse() {
+    let grammar = create_test_grammar();
+    let sentence = vec!["the".to_string(), "cat".to_string(), "barked".to_string()];
+    let expected_output = "(NOPARSE the cat barked)";
+    let result = parse_sentence(&grammar, &sentence, "S");
+    assert_eq!(result, expected_output);
+}
+
+#[test]
+fn cyk_parse_no_parse_valid_words_wrong_structure() {
+    let mut grammar = create_test_grammar();
+    grammar.binary_rules_by_children.retain(|key, _rules| {
+        key != &("DT".to_string(), "NN".to_string())
+    });
+
+    let sentence = vec!["the".to_string(), "dog".to_string(), "ran".to_string()];
+    let expected_output = "(NOPARSE the dog ran)";
+
+    let result = parse_sentence(&grammar, &sentence, "S");
+    assert_eq!(result, expected_output);
+}
+
+
+#[test]
+fn cyk_parse_empty_sentence() {
+    let grammar = create_test_grammar();
+    let sentence: Vec<String> = vec![];
+    let expected_output = "(NOPARSE)";
+    let result = parse_sentence(&grammar, &sentence, "S");
+    assert_eq!(result, expected_output);
 }

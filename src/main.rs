@@ -3,6 +3,8 @@ mod structs;
 mod parser;
 mod rules;
 mod output;
+mod grammar; 
+mod cyk;     
 #[cfg(test)]
 mod tests; 
 
@@ -11,18 +13,19 @@ use clap::Parser;
 use std::io::{self, BufRead};
 use std::collections::HashMap;
 
-use crate::structs::{Cli, Commands, Node};
+use crate::structs::Commands;
 use crate::parser::parse_tree;
 use crate::rules::extract_rules;
 use crate::output::write_pcfg_output;
-
+use crate::grammar::load_grammar;
+use crate::cyk::parse_sentence;
 
 // --- Main Logic ---
 fn main() -> io::Result<()> {
     let cli = structs::Cli::parse(); 
 
     match cli.command {
-        structs::Commands::Induce(args) => { 
+        Commands::Induce(args) => { 
             let mut non_lexical_rules: HashMap<String, u64> = HashMap::new();
             let mut lexical_rules: HashMap<String, u64> = HashMap::new();
 
@@ -72,7 +75,57 @@ fn main() -> io::Result<()> {
 
             write_pcfg_output(&non_lexical_rules, &lexical_rules, &lhs_totals, args.grammar_output_prefix)?;
 
-            eprintln!("PCFG induction complete.");
+            // eprintln!("PCFG induction complete.");
+        }
+        Commands::Parse(args) => {
+            eprintln!("Loading grammar from: {:?} and {:?}", args.rules_file, args.lexicon_file);
+
+            // Load Grammar
+            let grammar = match load_grammar(&args.rules_file, &args.lexicon_file) {
+                 Ok(g) => g,
+                 Err(e) => {
+                     eprintln!("Error loading grammar: {}", e);
+                     std::process::exit(2);
+                 }
+            };
+            // eprintln!("Grammar loaded successfully.");
+
+            if args.paradigma.to_lowercase() != "cyk" {
+                 std::process::exit(1);
+            }
+
+            // Read sentences
+            // eprintln!("Reading sentences");
+            let stdin = io::stdin();
+            let reader = stdin.lock();
+
+            for (line_num, line_result) in reader.lines().enumerate() {
+                 let line = match line_result {
+                     Ok(l) => l,
+                     Err(e) => {
+                         eprintln!("Error reading line {} from standard input: {}", line_num + 1, e);
+                         continue;
+                     }
+                 };
+
+                 let trimmed_line = line.trim();
+                 if trimmed_line.is_empty() {
+                     continue;
+                 }
+
+                 let words: Vec<String> = trimmed_line.split_whitespace().map(String::from).collect();
+
+                 if words.is_empty() {
+                    continue;
+                 }
+
+                 // Parsing using CYK
+                 let parse_result = parse_sentence(&grammar, &words, &args.initial_nonterminal);
+
+                 //  Print result
+                 println!("{}", parse_result);
+            }
+             eprintln!("Parsing complete.");
         }
     }
 
