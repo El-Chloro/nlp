@@ -8,23 +8,23 @@ use std::num::ParseFloatError;
 
 #[derive(Debug, Clone)]
 pub struct LexicalRule {
-    pub lhs: String,
+    pub lhs_id: usize,
     pub rhs: String, 
     pub probability: f64,
 }
 
 #[derive(Debug, Clone)]
 pub struct UnaryRule {
-    pub lhs: String,
-    pub rhs: String, 
+    pub lhs_id: usize, 
+    pub rhs_id: usize, 
     pub probability: f64,
 }
 
 #[derive(Debug, Clone)]
 pub struct BinaryRule {
-    pub lhs: String,
-    pub rhs1: String, 
-    pub rhs2: String, 
+    pub lhs_id: usize,  
+    pub rhs1_id: usize, 
+    pub rhs2_id: usize, 
     pub probability: f64,
 }
 
@@ -34,31 +34,51 @@ pub struct Grammar {
     pub terminals: HashSet<String>,
     pub start_symbol: String,
 
+    pub non_terminal_to_id: HashMap<String, usize>,
+    pub id_to_non_terminal: Vec<String>,
+    next_nt_id: usize,
+
     pub lexical_rules_by_rhs: HashMap<String, Vec<LexicalRule>>,
-    pub unary_rules_by_rhs: HashMap<String, Vec<UnaryRule>>,
-    pub binary_rules_by_children: HashMap<(String, String), Vec<BinaryRule>>,
-    pub unary_rules_by_lhs: HashMap<String, Vec<UnaryRule>>,
+    pub unary_rules_by_rhs: HashMap<usize, Vec<UnaryRule>>,
+    pub binary_rules_by_children: HashMap<(usize, usize), Vec<BinaryRule>>,
+    pub unary_rules_by_lhs: HashMap<usize, Vec<UnaryRule>>,
 }
 
 impl Grammar {
-    fn add_non_terminal(&mut self, nt: &str) {
-        self.non_terminals.insert(nt.to_string());
+    fn new() -> Self {
+        Grammar {
+            non_terminals: HashSet::new(),
+            terminals: HashSet::new(),
+            start_symbol: String::new(),
+            non_terminal_to_id: HashMap::new(),
+            id_to_non_terminal: Vec::new(),
+            next_nt_id: 0,
+            lexical_rules_by_rhs: HashMap::new(),
+            unary_rules_by_rhs: HashMap::new(),
+            binary_rules_by_children: HashMap::new(),
+            unary_rules_by_lhs: HashMap::new(),
+        }
+    }
+
+    // Get iD for a non-terminal string, if not exist create a new ID 
+    fn get_or_intern_non_terminal(&mut self, nt_name: &str) -> usize {
+        if let Some(id) = self.non_terminal_to_id.get(nt_name) {
+            *id
+        } else {
+            let id = self.next_nt_id;
+            self.non_terminal_to_id.insert(nt_name.to_string(), id);
+            self.id_to_non_terminal.push(nt_name.to_string());
+            self.non_terminals.insert(nt_name.to_string());
+            self.next_nt_id += 1;
+            id
+        }
     }
 }
-
 
 // --- Loading Gramar ---
 
 pub fn load_grammar(rules_path: &Path, lexicon_path: &Path) -> io::Result<Grammar> {
-    let mut grammar = Grammar {
-        non_terminals: HashSet::new(),
-        terminals: HashSet::new(),
-        start_symbol: String::new(), 
-        lexical_rules_by_rhs: HashMap::new(),
-        unary_rules_by_rhs: HashMap::new(),
-        binary_rules_by_children: HashMap::new(),
-        unary_rules_by_lhs: HashMap::new(),
-    };
+    let mut grammar = Grammar::new();
 
     // --- Load Lexicon File ---
     let lexicon_file = File::open(lexicon_path)?;
@@ -67,17 +87,17 @@ pub fn load_grammar(rules_path: &Path, lexicon_path: &Path) -> io::Result<Gramma
         let line = line_result?;
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() == 3 {
-            let lhs = parts[0].to_string();
-            let rhs = parts[1].to_string();
+            let lhs_str = parts[0];
+            let rhs_word = parts[1].to_string();
             let probability = parse_probability(parts[2], lexicon_path, line_num + 1)?;
 
-            grammar.add_non_terminal(&lhs);
-            grammar.terminals.insert(rhs.clone());
+            let lhs_id = grammar.get_or_intern_non_terminal(lhs_str);
+            grammar.terminals.insert(rhs_word.clone());
 
-            let rule = LexicalRule { lhs: lhs.clone(), rhs: rhs.clone(), probability };
-            grammar.lexical_rules_by_rhs.entry(rhs).or_default().push(rule);
+            let rule = LexicalRule { lhs_id, rhs: rhs_word.clone(), probability };
+            grammar.lexical_rules_by_rhs.entry(rhs_word).or_default().push(rule);
         } else if !parts.is_empty() {
-            eprintln!("Warning: Skipping malformed lexicon line {}: '{}'", line_num + 1, line.trim());
+            eprintln!("Warning: Skip wrong lexicon line {}: '{}'", line_num + 1, line.trim());
         }
     }
 
@@ -90,37 +110,37 @@ pub fn load_grammar(rules_path: &Path, lexicon_path: &Path) -> io::Result<Gramma
              let (rule_part, prob_str) = line.split_at(last_space_idx);
              let probability = parse_probability(prob_str.trim(), rules_path, line_num + 1)?;
 
-             if let Some((lhs_str, rhs_part)) = rule_part.split_once("->") {
-                 let lhs = lhs_str.trim().to_string();
-                 let rhs_symbols: Vec<String> = rhs_part.split_whitespace().map(String::from).collect();
+             if let Some((lhs_str_raw, rhs_part)) = rule_part.split_once(" -> ") {
+                 let lhs_str = lhs_str_raw.trim();
+                 let rhs_symbols_str: Vec<String> = rhs_part.split_whitespace().map(String::from).collect();
 
-                 grammar.add_non_terminal(&lhs);
+                 let lhs_id = grammar.get_or_intern_non_terminal(lhs_str);
 
-                 match rhs_symbols.len() {
-                     1 => {// Unary Rule: A -> B
-                         let rhs = rhs_symbols[0].clone();
-                         grammar.add_non_terminal(&rhs);
-                         let rule = UnaryRule { lhs: lhs.clone(), rhs: rhs.clone(), probability };
-                         grammar.unary_rules_by_rhs.entry(rhs.clone()).or_default().push(rule.clone());
-                         grammar.unary_rules_by_lhs.entry(lhs).or_default().push(rule);
+                 match rhs_symbols_str.len() {
+                     1 => { // Unary Rule: A -> B
+                         let rhs_b_str = &rhs_symbols_str[0];
+                         let rhs_b_id = grammar.get_or_intern_non_terminal(rhs_b_str);
+                         let rule = UnaryRule { lhs_id, rhs_id: rhs_b_id, probability };
+                         grammar.unary_rules_by_rhs.entry(rhs_b_id).or_default().push(rule.clone());
+                         grammar.unary_rules_by_lhs.entry(lhs_id).or_default().push(rule);
                      }
-                     2 => {// Binary Rule: A -> B C
-                         let rhs1 = rhs_symbols[0].clone();
-                         let rhs2 = rhs_symbols[1].clone();
-                         grammar.add_non_terminal(&rhs1);
-                         grammar.add_non_terminal(&rhs2);
-                         let rule = BinaryRule { lhs: lhs.clone(), rhs1: rhs1.clone(), rhs2: rhs2.clone(), probability };
-                         grammar.binary_rules_by_children.entry((rhs1, rhs2)).or_default().push(rule.clone());
+                     2 => { // Binary Rule: A -> B C
+                         let rhs_b_str = &rhs_symbols_str[0];
+                         let rhs_c_str = &rhs_symbols_str[1];
+                         let rhs_b_id = grammar.get_or_intern_non_terminal(rhs_b_str);
+                         let rhs_c_id = grammar.get_or_intern_non_terminal(rhs_c_str);
+                         let rule = BinaryRule { lhs_id, rhs1_id: rhs_b_id, rhs2_id: rhs_c_id, probability };
+                         grammar.binary_rules_by_children.entry((rhs_b_id, rhs_c_id)).or_default().push(rule.clone());
                      }
-                     _ => {// Not CNF or unary
-                        eprintln!("Warning: Skipping non-CNF rule line {}: '{}'", line_num + 1, line.trim());
+                     _ => { // Not CNF or unary
+                        eprintln!("Warning: Skip non-CNF rule line {}: '{}', lhs: {}, rhs: {}", line_num + 1, line.trim(), lhs_str, rhs_part);
                      }
                  }
              } else {
-                eprintln!("Warning: Skipping wrong rule line {} (no '->'): '{}'", line_num + 1, line.trim());
+                eprintln!("Warning: Skip wrong rule line {} (no '->'): '{}'", line_num + 1, line.trim());
              }
         } else if !line.trim().is_empty() {
-            eprintln!("Warning: Skipping wrong rule line {} (no probability): '{}'", line_num + 1, line.trim());
+            eprintln!("Warning: Skip wrong rule line {} (no probability): '{}'", line_num + 1, line.trim());
         }
      }
 
@@ -128,18 +148,19 @@ pub fn load_grammar(rules_path: &Path, lexicon_path: &Path) -> io::Result<Gramma
     if grammar.non_terminals.contains("ROOT") {
         grammar.start_symbol = "ROOT".to_string();
     } else if !grammar.non_terminals.is_empty() {
-        if let Some(first_nt) = grammar.non_terminals.iter().min() { 
-            grammar.start_symbol = first_nt.clone();
-            eprintln!("Warning: 'ROOT' not found, defaulting start symbol to '{}'", first_nt);
+        if let Some(first_nt_str) = grammar.non_terminals.iter().min() {
+            grammar.start_symbol = first_nt_str.clone();
+            eprintln!("Warning: 'ROOT' not found, defaulting start symbol to '{}'", first_nt_str);
         } else {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Cannot determine start symbol."));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Cannot determine start symbol"));
         }
     } else {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "No non-terminals found in grammar."));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "No non-terminals found in grammar - can not detremine start symbol."));
     }
 
+    // Final check for determine start symbol's existence
     if !grammar.non_terminals.contains(&grammar.start_symbol) {
-        let error_msg = format!("Start symbol '{}' not found in non-terminals.", grammar.start_symbol);
+        let error_msg = format!("Determine start symbol '{}' is not in the set of known non-terminals", grammar.start_symbol);
         eprintln!("Error: {}", error_msg);
         return Err(io::Error::new(io::ErrorKind::InvalidData, error_msg));
     }

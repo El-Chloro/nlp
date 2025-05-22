@@ -4,7 +4,7 @@ mod parser;
 mod rules;
 mod output;
 mod grammar; 
-mod cyk;     
+mod cyk;
 #[cfg(test)]
 mod tests; 
 
@@ -20,8 +20,13 @@ use crate::output::write_pcfg_output;
 use crate::grammar::load_grammar;
 use crate::cyk::parse_sentence;
 
+
+// use std::time::Instant; ////////////////////////////////////////////////////////////////////////////////////////////////////
+
 // --- Main Logic ---
 fn main() -> io::Result<()> {
+    // let total_time = Instant::now(); ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //  let start_time = Instant::now(); ////////////////////////////////////////////////////////////////////////////////////////////////////
     let cli = structs::Cli::parse(); 
 
     match cli.command {
@@ -32,7 +37,7 @@ fn main() -> io::Result<()> {
             let stdin = io::stdin();
             let reader = stdin.lock();
 
-            eprintln!("Reading trees from standard input and inducing PCFG...");
+            // eprintln!("Reading trees from standard input and inducing PCFG...");
 
             for (line_num, line_result) in reader.lines().enumerate() {
                 match line_result {
@@ -69,7 +74,7 @@ fn main() -> io::Result<()> {
                  if let Some((lhs, _)) = rule.split_once(" -> ") {
                      *lhs_totals.entry(lhs.trim().to_string()).or_insert(0) += count;
                  } else {
-                     eprintln!("Warning: Malformed rule found during LHS total calculation: {}", rule);
+                     eprintln!("Warning: wrong rule found during LHS total calculation: {}", rule);
                  }
             }
 
@@ -78,7 +83,7 @@ fn main() -> io::Result<()> {
             // eprintln!("PCFG induction complete.");
         }
         Commands::Parse(args) => {
-            eprintln!("Loading grammar from: {:?} and {:?}", args.rules_file, args.lexicon_file);
+            // eprintln!("Loading grammar from: {:?} and {:?}", args.rules_file, args.lexicon_file);
 
             // Load Grammar
             let grammar = match load_grammar(&args.rules_file, &args.lexicon_file) {
@@ -98,8 +103,11 @@ fn main() -> io::Result<()> {
             // eprintln!("Reading sentences");
             let stdin = io::stdin();
             let reader = stdin.lock();
+            // let duration = start_time.elapsed();////////////////////////////////////////////////////////////////////////////////////////////////////
+            // eprintln!("Programm-Laufzeit: {:?}", duration); ////////////////////////////////////////////////////////////////////////////////////////////////////
 
             for (line_num, line_result) in reader.lines().enumerate() {
+                // let start_time = Instant::now(); ////////////////////////////////////////////////////////////////////////////////////////////////////
                  let line = match line_result {
                      Ok(l) => l,
                      Err(e) => {
@@ -119,13 +127,20 @@ fn main() -> io::Result<()> {
                     continue;
                  }
 
-                 // Parsing using CYK
-                 let parse_result = parse_sentence(&grammar, &words, &args.initial_nonterminal);
+                 // Parsing using CYK 
+                 // The `initial_nonterminal` is still passed as a String. 
+                 // `parse_sentence` will handle its conversion to an ID.
+                 let parse_result = parse_sentence(&grammar, &words, &args.initial_nonterminal); //
 
                  //  Print result
                  println!("{}", parse_result);
+                //  let duration = start_time.elapsed(); ////////////////////////////////////////////////////////////////////////////////////////////////////
+                //  eprintln!("Programm-Laufzeit: {:?}", duration); ////////////////////////////////////////////////////////////////////////////////////////////////////
+
             }
-             eprintln!("Parsing complete.");
+            //  eprintln!("Parsing complete.");
+            // let duration = total_time.elapsed(); ////////////////////////////////////////////////////////////////////////////////////////////////////
+            // eprintln!("Programm-Laufzeit: {:?}", duration); ////////////////////////////////////////////////////////////////////////////////////////////////////
         }
     }
 
