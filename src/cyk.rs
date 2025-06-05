@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 struct ChartEntry {
-    probability: f64,
+    cost: f64,
     backpointer: Option<BackPointer>,
 }
 
@@ -43,84 +43,80 @@ pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &st
     for i in 0..n {
         let word = &words[i];
         let j = i + 1;
+        let cell = &mut chart[j][i];
 
         if let Some(rules) = grammar.lexical_rules_by_rhs.get(word) {
             for rule in rules { 
-                let entry = chart[j][i].entry(rule.lhs_id).or_insert_with(|| ChartEntry {
-                    probability: 0.0,
+                let entry = cell.entry(rule.lhs_id).or_insert_with(|| ChartEntry {
+                    cost: f64::INFINITY,
                     backpointer: None,
                 });
-                if rule.probability > entry.probability {
-                    entry.probability = rule.probability;
+                if rule.cost < entry.cost {
+                    entry.cost = rule.cost;
                     entry.backpointer = Some(BackPointer::Terminal); 
                 }
             }
         }
 
-        apply_unary_closure(grammar, &mut chart[j][i]);
+        apply_unary_closure(grammar, cell);
     }
 
     //  Main CYK loop: fill cells for spans of length > 1
     for r in 2..=n { // r: span length 
         for i in 0..=(n - r) { // i: span start 
             let j = i + r; // j: span end 
-
-            let mut cell_updates: HashMap<usize, ChartEntry> = HashMap::new();
+            
+            // Collect potential updates for the cell (j, i) to avoid borrow checker issues.
+            let mut binary_updates: Vec<(usize, f64, BackPointer)> = Vec::new();
 
             for m in (i + 1)..j { // m: split point
-                // Get All nonterminals wiht positive probabilities 
-                let left_span_entries: Vec<(usize, f64)> = chart[m][i]
-                    .iter().filter(|(_, e)| e.probability > 0.0).map(|(nt_id, e)| (*nt_id, e.probability)).collect();
-                let right_span_entries: Vec<(usize, f64)> = chart[j][m]
-                    .iter().filter(|(_, e)| e.probability > 0.0).map(|(nt_id, e)| (*nt_id, e.probability)).collect();
+                let left_span_entries = &chart[m][i];
+                let right_span_entries = &chart[j][m];
 
                 // Try all binary rules A → B C
-                for (b_nt_id, b_prob) in &left_span_entries {
-                    for (c_nt_id, c_prob) in &right_span_entries {
-                        // Lookup binary rules using (B_ID, C_ID)
+                for (b_nt_id, b_entry) in left_span_entries.iter() {
+                    if b_entry.cost.is_infinite() { continue; }
+                    for (c_nt_id, c_entry) in right_span_entries.iter() {
+                        if c_entry.cost.is_infinite() { continue; }
+
                         if let Some(rules) = grammar.binary_rules_by_children.get(&(*b_nt_id, *c_nt_id)) {
-                            for rule in rules { 
-                                let new_prob = rule.probability * b_prob * c_prob;
-                                let a_nt_id = rule.lhs_id; // ID of A
-
-                                let current_best_in_cell_updates = cell_updates.entry(a_nt_id).or_insert_with(|| ChartEntry {
-                                    probability: 0.0, backpointer: None,
-                                });
-
-                                if new_prob > current_best_in_cell_updates.probability {
-                                    current_best_in_cell_updates.probability = new_prob;
-                                    current_best_in_cell_updates.backpointer = Some(BackPointer::Binary {
-                                        split_point: m,
-                                        left_child_non_terminal_id: *b_nt_id,
-                                        right_child_non_terminal_id: *c_nt_id,
-                                    });
-                                }
+                            for rule in rules {
+                                let new_cost = rule.cost + b_entry.cost + c_entry.cost;
+                                let a_nt_id = rule.lhs_id;
+                                let backpointer = BackPointer::Binary {
+                                    split_point: m,
+                                    left_child_non_terminal_id: *b_nt_id,
+                                    right_child_non_terminal_id: *c_nt_id,
+                                };
+                                binary_updates.push((a_nt_id, new_cost, backpointer));
                             }
                         }
                     }
                 }
             }
 
-            // iF start symbol derives the whole sentence, build parse tree
+            // Now, apply the collected updates. The immutable borrows from the chart are gone.
             let target_cell = &mut chart[j][i];
-            for (nt_id_from_update, entry_from_update) in cell_updates {
-                if entry_from_update.probability > 0.0 {
-                    let current_target_entry = target_cell.entry(nt_id_from_update).or_insert_with(|| ChartEntry {
-                        probability: 0.0, backpointer: None,
-                    });
-                    if entry_from_update.probability > current_target_entry.probability {
-                        *current_target_entry = entry_from_update;
-                    }
+            for (a_nt_id, new_cost, backpointer) in binary_updates {
+                let entry = target_cell.entry(a_nt_id).or_insert_with(|| ChartEntry {
+                    cost: f64::INFINITY,
+                    backpointer: None,
+                });
+
+                if new_cost < entry.cost {
+                    entry.cost = new_cost;
+                    entry.backpointer = Some(backpointer);
                 }
             }
             
+            // After the binary rules are processed, apply unary closure on the updated cell.
             apply_unary_closure(grammar, target_cell);
         }
     }
 
     // Check if start symbol exists in highest chart cell 
     if let Some(final_entry) = chart[n][0].get(&start_symbol_id) {
-        if final_entry.probability > 0.0 {
+        if final_entry.cost < f64::INFINITY {
             // Reconstruct tree using start symbol ID
             return reconstruct_tree(grammar, &chart, start_symbol_id, 0, n, words);
         }
@@ -130,45 +126,50 @@ pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &st
 }
 
 fn apply_unary_closure(grammar: &Grammar, cell: &mut HashMap<usize, ChartEntry>) {
-     let mut changed = true;
-     while changed {
-        changed = false;
-        // Collect updates to avoid changing the map while iterating
-        let mut additions: Vec<(usize, ChartEntry)> = Vec::new();
+    // Collect initial non-terminals in the cell
+    let mut worklist: Vec<usize> = cell.keys().copied().collect();
+    let mut processed = 0;
 
-        for (b_nt_id_ref, b_entry) in cell.iter() {
-            if b_entry.probability == 0.0 { continue; }
-            let b_nt_id = *b_nt_id_ref;
+    while processed < worklist.len() {
+        let b_nt_id = worklist[processed];
+        processed += 1;
+        
+        let b_entry_cost = if let Some(e) = cell.get(&b_nt_id) {
+            e.cost
+        } else {
+            continue; 
+        };
 
-             // Find rules A -> B where B is b_nt_id
-             if let Some(unary_rules) = grammar.unary_rules_by_rhs.get(&b_nt_id) {
-                 for rule in unary_rules { // rule is unary rule (A_ID -> B_ID)
-                     let new_prob = rule.probability * b_entry.probability;
-                     let a_nt_id = rule.lhs_id; // ID of A
+        if b_entry_cost.is_infinite() { continue; }
 
-                     // Check curent probability of A in this cell
-                     let current_prob_a = cell.get(&a_nt_id).map_or(0.0, |e| e.probability);
+        // Find rules A -> B where B is b_nt_id
+        if let Some(unary_rules) = grammar.unary_rules_by_rhs.get(&b_nt_id) {
+            for rule in unary_rules {
+                let new_cost = rule.cost + b_entry_cost;
+                let a_nt_id = rule.lhs_id;
 
-                     // If this path to A is better, prepare an update
-                     if new_prob > current_prob_a {
-                         let new_entry_a = ChartEntry {
-                             probability: new_prob,
-                             backpointer: Some(BackPointer::Unary {
-                                 child_non_terminal_id: b_nt_id, // Store ID of B
-                             }),
-                         };
-                         additions.push((a_nt_id, new_entry_a)); // Add (A_ID, new_entry_for_A)
-                         changed = true;
-                     }
-                 }
-             }
+                let current_cost_a = cell.get(&a_nt_id).map_or(f64::INFINITY, |e| e.cost);
+
+                if new_cost < current_cost_a {
+                    let new_entry_a = ChartEntry {
+                        cost: new_cost,
+                        backpointer: Some(BackPointer::Unary {
+                            child_non_terminal_id: b_nt_id,
+                        }),
+                    };
+                    // Insert or update the entry for A
+                    cell.insert(a_nt_id, new_entry_a);
+                    
+                    // If A is new or updated, add it to the worklist to be processed
+                    if !worklist.contains(&a_nt_id) {
+                        worklist.push(a_nt_id);
+                    }
+                }
+            }
         }
-        // Apply colected additions to the cell
-        for (nt_id, entry) in additions {
-            cell.insert(nt_id, entry);
-        }
-     }
+    }
 }
+
 
 // rekursive reconstruction of the parse tree from the completed CYK chart
 fn reconstruct_tree(

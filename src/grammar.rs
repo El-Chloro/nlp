@@ -10,14 +10,14 @@ use std::num::ParseFloatError;
 pub struct LexicalRule {
     pub lhs_id: usize,
     pub rhs: String, 
-    pub probability: f64,
+    pub cost: f64,
 }
 
 #[derive(Debug, Clone)]
 pub struct UnaryRule {
     pub lhs_id: usize, 
     pub rhs_id: usize, 
-    pub probability: f64,
+    pub cost: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -25,7 +25,7 @@ pub struct BinaryRule {
     pub lhs_id: usize,  
     pub rhs1_id: usize, 
     pub rhs2_id: usize, 
-    pub probability: f64,
+    pub cost: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -90,11 +90,12 @@ pub fn load_grammar(rules_path: &Path, lexicon_path: &Path) -> io::Result<Gramma
             let lhs_str = parts[0];
             let rhs_word = parts[1].to_string();
             let probability = parse_probability(parts[2], lexicon_path, line_num + 1)?;
+            let cost = if probability > 0.0 { -probability.ln() } else { f64::INFINITY };
 
             let lhs_id = grammar.get_or_intern_non_terminal(lhs_str);
             grammar.terminals.insert(rhs_word.clone());
 
-            let rule = LexicalRule { lhs_id, rhs: rhs_word.clone(), probability };
+            let rule = LexicalRule { lhs_id, rhs: rhs_word.clone(), cost };
             grammar.lexical_rules_by_rhs.entry(rhs_word).or_default().push(rule);
         } else if !parts.is_empty() {
             eprintln!("Warning: Skip wrong lexicon line {}: '{}'", line_num + 1, line.trim());
@@ -109,6 +110,7 @@ pub fn load_grammar(rules_path: &Path, lexicon_path: &Path) -> io::Result<Gramma
         if let Some(last_space_idx) = line.rfind(' ') {
              let (rule_part, prob_str) = line.split_at(last_space_idx);
              let probability = parse_probability(prob_str.trim(), rules_path, line_num + 1)?;
+             let cost = if probability > 0.0 { -probability.ln() } else { f64::INFINITY };
 
              if let Some((lhs_str_raw, rhs_part)) = rule_part.split_once(" -> ") {
                  let lhs_str = lhs_str_raw.trim();
@@ -120,7 +122,7 @@ pub fn load_grammar(rules_path: &Path, lexicon_path: &Path) -> io::Result<Gramma
                      1 => { // Unary Rule: A -> B
                          let rhs_b_str = &rhs_symbols_str[0];
                          let rhs_b_id = grammar.get_or_intern_non_terminal(rhs_b_str);
-                         let rule = UnaryRule { lhs_id, rhs_id: rhs_b_id, probability };
+                         let rule = UnaryRule { lhs_id, rhs_id: rhs_b_id, cost };
                          grammar.unary_rules_by_rhs.entry(rhs_b_id).or_default().push(rule.clone());
                          grammar.unary_rules_by_lhs.entry(lhs_id).or_default().push(rule);
                      }
@@ -129,7 +131,7 @@ pub fn load_grammar(rules_path: &Path, lexicon_path: &Path) -> io::Result<Gramma
                          let rhs_c_str = &rhs_symbols_str[1];
                          let rhs_b_id = grammar.get_or_intern_non_terminal(rhs_b_str);
                          let rhs_c_id = grammar.get_or_intern_non_terminal(rhs_c_str);
-                         let rule = BinaryRule { lhs_id, rhs1_id: rhs_b_id, rhs2_id: rhs_c_id, probability };
+                         let rule = BinaryRule { lhs_id, rhs1_id: rhs_b_id, rhs2_id: rhs_c_id, cost };
                          grammar.binary_rules_by_children.entry((rhs_b_id, rhs_c_id)).or_default().push(rule.clone());
                      }
                      _ => { // Not CNF or unary
