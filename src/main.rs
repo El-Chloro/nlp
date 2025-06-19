@@ -1,4 +1,4 @@
-// --- Module Deklarationen ---
+// --- Module Declarations ---
 mod structs;
 mod parser;
 mod rules;
@@ -99,7 +99,7 @@ fn main() -> io::Result<()> {
                      std::process::exit(2);
                  }
             };
-            eprintln!("Grammar loaded successfully.");
+            // eprintln!("Grammar loaded successfully.");
 
             if args.paradigma.to_lowercase() != "cyk" {
                  eprintln!("Error: Invalid paradigm '{}'. Only 'cyk' is supported.", args.paradigma);
@@ -107,11 +107,11 @@ fn main() -> io::Result<()> {
             }
 
             // Read sentences
-            eprintln!("Reading sentences");
+            // eprintln!("Reading sentences");
             let stdin = io::stdin();
             let reader = stdin.lock();
             let duration = start_time.elapsed();
-            eprintln!("Programm-Laufzeit: {:?}", duration);
+            // eprintln!("Program runtime: {:?}", duration);
 
             for (line_num, line_result) in reader.lines().enumerate() {
                 let start_time = Instant::now();
@@ -161,11 +161,28 @@ fn main() -> io::Result<()> {
                  }
 
                  let duration = start_time.elapsed();
-                 eprintln!("Satz-Laufzeit: {:?}", duration);
+                //  eprintln!("Sentence runtime: {:?}", duration);
             }
-             eprintln!("Parsing complete.");
+            //  eprintln!("Parsing complete.");
             let duration = total_time.elapsed();
-            eprintln!("Programm-Laufzeit: {:?}", duration);
+            // eprintln!("Total program runtime: {:?}", duration);
+        }
+        Commands::Binarise(args) => {
+            let stdin = io::stdin();
+            for line_result in stdin.lock().lines() {
+                let line = line_result?;
+                let trimmed_line = line.trim();
+                if trimmed_line.is_empty() {
+                    continue;
+                }
+                match parse_tree(trimmed_line) {
+                    Ok(tree) => {
+                        let binarised_tree = transformations::binarise_tree(&tree, args.horizontal, args.vertical);
+                        println!("{}", tree_to_string(&binarised_tree));
+                    }
+                    Err(e) => eprintln!("Error parsing tree: {:?} on line '{}'", e, trimmed_line),
+                }
+            }
         }
         Commands::Debinarise(_) => {
             let stdin = io::stdin();
@@ -216,7 +233,7 @@ fn main() -> io::Result<()> {
                 println!("{}", tree_to_string(tree));
             }
         }
-        Commands::Binarise(_) | Commands::Smooth(_) | Commands::Outside(_) => {
+        Commands::Smooth(_) | Commands::Outside(_) => {
             eprintln!("Error: This command is not implemented.");
             std::process::exit(22);
         }

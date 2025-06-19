@@ -76,6 +76,11 @@ pub struct ParseArgs {
 
 #[derive(Args, Debug)]
 pub struct BinariseArgs {
+    #[arg(short = 'h', long = "horizontal", default_value_t = 999)]
+    pub horizontal: usize,
+
+    #[arg(short = 'v', long = "vertical", default_value_t = 1)]
+    pub vertical: usize,
 }
 
 #[derive(Args, Debug)]

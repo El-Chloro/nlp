@@ -2,7 +2,7 @@ use crate::structs::Node;
 use crate::parser::parse_tree;
 use crate::rules::extract_rules;
 use crate::output::{write_pcfg_output, tree_to_string};
-use crate::transformations::{debinarise_node, collect_leaves, replace_rare_words, restore_words};
+use crate::transformations::{debinarise_node, collect_leaves, replace_rare_words, restore_words, binarise_tree};
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -526,7 +526,65 @@ fn cyk_parse_empty_sentence() {
     assert!(result.is_none());
 }
 
-// --- Tests for Transformations (Debinarise, Unk) ---
+// --- Tests for Transformations (Binarise, Debinarise, Unk) ---
+
+#[test]
+fn test_binarise_simple_structure() {
+    // v=1, h=999. Test basic right-branching binarization.
+    let original_str = "(A (B b) (C c) (D d))";
+    let tree = parse_tree(original_str).unwrap();
+    let binarised_tree = binarise_tree(&tree, 999, 1);
+    let expected_str = "(A (B b) (A|C,D (C c) (D d)))";
+    assert_eq!(tree_to_string(&binarised_tree), expected_str);
+}
+
+#[test]
+fn test_binarise_no_change_for_binary_tree() {
+    // A tree that is already binary should not have its structure changed when v=1.
+    let original_str = "(S (NP (DT a) (NN man)) (VP (V runs)))";
+    let tree = parse_tree(original_str).unwrap();
+    let binarised_tree = binarise_tree(&tree, 999, 1);
+    assert_eq!(tree, binarised_tree, "Already binary tree should not be changed with v=1");
+}
+
+#[test]
+fn test_binarise_vertical_markovization() {
+    // v=2, h=999. Ancestor labels should be prepended.
+    let original_str = "(S (NP (NNP John)) (VP (V saw) (NP (DT the) (NN dog))))";
+    let tree = parse_tree(original_str).unwrap();
+    let binarised_tree = binarise_tree(&tree, 999, 2);
+    let expected_str = "(S (S^NP (NNP John)) (S^VP (V saw) (VP^NP (DT the) (NN dog))))";
+    assert_eq!(tree_to_string(&binarised_tree), expected_str);
+}
+
+#[test]
+fn test_binarise_horizontal_markovization() {
+    // v=1, h=1.
+    let original_str = "(S (A a) (B b) (C c) (D d))";
+    let tree = parse_tree(original_str).unwrap();
+    let binarised_tree = binarise_tree(&tree, 1, 1);
+    let expected_str = "(S (A a) (S|B (B b) (S|B|C (C c) (D d))))";
+    assert_eq!(tree_to_string(&binarised_tree), expected_str);
+}
+
+#[test]
+fn test_binarise_combined_markovization() {
+    // v=2, h=1.
+    let original_str = "(S (A a) (B b) (C c))";
+    let tree = parse_tree(original_str).unwrap();
+    let binarised_tree = binarise_tree(&tree, 1, 2);
+    let expected_str = "(S (A a) (S^S|B (B b) (C c)))";
+    assert_eq!(tree_to_string(&binarised_tree), expected_str);
+}
+
+#[test]
+fn test_binarise_preterminal_is_unchanged() {
+    // A pre-terminal node like (DT the) should not be modified at all.
+    let original_str = "(DT the)";
+    let tree = parse_tree(original_str).unwrap();
+    let binarised_tree = binarise_tree(&tree, 999, 2); // v=2 to ensure no-op is because of pre-terminal rule
+    assert_eq!(tree, binarised_tree, "Pre-terminal node should be returned unchanged.");
+}
 
 #[test]
 fn test_debinarise_simple() {
