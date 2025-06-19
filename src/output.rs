@@ -1,8 +1,23 @@
-use std::fs::File; 
-use std::io::{self, BufWriter, Write}; 
-use std::collections::{HashMap, HashSet}; 
+use crate::structs::Node;
+use std::fs::File;
+use std::io::{self, BufWriter, Write};
+use std::collections::{HashMap, HashSet};
 
 // --- Output Writing---
+
+// Converts a Node tree back into its Treebank string
+pub fn tree_to_string(node: &Node) -> String {
+    if node.is_terminal() {
+        // leaf node (a word)
+        return node.label.clone();
+    }
+    // non-terminal or pre-terminal node
+    let children_strs: Vec<String> = node.children.iter()
+        .map(tree_to_string)
+        .collect();
+    format!("({} {})", node.label, children_strs.join(" "))
+}
+
 pub fn write_pcfg_output(
     non_lexical_rules: &HashMap<String, u64>,
     lexical_rules: &HashMap<String, u64>,

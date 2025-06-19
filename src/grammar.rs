@@ -9,22 +9,22 @@ use std::num::ParseFloatError;
 #[derive(Debug, Clone)]
 pub struct LexicalRule {
     pub lhs_id: usize,
-    pub rhs: String, 
+    pub rhs: String,
     pub cost: f64,
 }
 
 #[derive(Debug, Clone)]
 pub struct UnaryRule {
-    pub lhs_id: usize, 
-    pub rhs_id: usize, 
+    pub lhs_id: usize,
+    pub rhs_id: usize,
     pub cost: f64,
 }
 
 #[derive(Debug, Clone)]
 pub struct BinaryRule {
-    pub lhs_id: usize,  
-    pub rhs1_id: usize, 
-    pub rhs2_id: usize, 
+    pub lhs_id: usize,
+    pub rhs1_id: usize,
+    pub rhs2_id: usize,
     pub cost: f64,
 }
 
@@ -45,7 +45,7 @@ pub struct Grammar {
 }
 
 impl Grammar {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Grammar {
             non_terminals: HashSet::new(),
             terminals: HashSet::new(),
@@ -60,8 +60,8 @@ impl Grammar {
         }
     }
 
-    // Get iD for a non-terminal string, if not exist create a new ID 
-    fn get_or_intern_non_terminal(&mut self, nt_name: &str) -> usize {
+    // Get iD for a non-terminal string, if not exist create a new ID
+    pub fn get_or_intern_non_terminal(&mut self, nt_name: &str) -> usize {
         if let Some(id) = self.non_terminal_to_id.get(nt_name) {
             *id
         } else {
@@ -72,6 +72,24 @@ impl Grammar {
             self.next_nt_id += 1;
             id
         }
+    }
+
+    // --- Test Helper Methods ---
+    #[cfg(test)]
+    pub fn add_lexical_rule(&mut self, rule: LexicalRule) {
+        self.terminals.insert(rule.rhs.clone());
+        self.lexical_rules_by_rhs.entry(rule.rhs.clone()).or_default().push(rule);
+    }
+
+    #[cfg(test)]
+    pub fn add_unary_rule(&mut self, rule: UnaryRule) {
+        self.unary_rules_by_rhs.entry(rule.rhs_id).or_default().push(rule.clone());
+        self.unary_rules_by_lhs.entry(rule.lhs_id).or_default().push(rule);
+    }
+
+    #[cfg(test)]
+    pub fn add_binary_rule(&mut self, rule: BinaryRule) {
+        self.binary_rules_by_children.entry((rule.rhs1_id, rule.rhs2_id)).or_default().push(rule);
     }
 }
 

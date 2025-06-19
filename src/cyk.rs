@@ -1,4 +1,5 @@
 use crate::grammar::Grammar;
+use crate::structs::Node;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -17,22 +18,23 @@ enum BackPointer {
         split_point: usize,
         left_child_non_terminal_id: usize,
         right_child_non_terminal_id: usize,
-    }
+    },
 }
 
 type Chart = Vec<Vec<HashMap<usize, ChartEntry>>>;
 
-pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &str) -> String {
+pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &str) -> Option<Node> {
     let n = words.len();
     if n == 0 {
-        return "(NOPARSE)".to_string();
+        return None;
     }
 
     // Get ID for start symbol string
     let start_symbol_id = match grammar.non_terminal_to_id.get(start_symbol_str) {
         Some(id) => *id,
         None => {
-            return format!("(NOPARSE Error: Start symbol '{}' not found in grammar)", start_symbol_str);
+            // This case is handled by returning None, caller can format the error.
+            return None;
         }
     };
 
@@ -45,15 +47,16 @@ pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &st
         let j = i + 1;
         let cell = &mut chart[j][i];
 
+        // Handle unknown words if they made it this far (UNK)
         if let Some(rules) = grammar.lexical_rules_by_rhs.get(word) {
-            for rule in rules { 
+            for rule in rules {
                 let entry = cell.entry(rule.lhs_id).or_insert_with(|| ChartEntry {
                     cost: f64::INFINITY,
                     backpointer: None,
                 });
                 if rule.cost < entry.cost {
                     entry.cost = rule.cost;
-                    entry.backpointer = Some(BackPointer::Terminal); 
+                    entry.backpointer = Some(BackPointer::Terminal);
                 }
             }
         }
@@ -62,10 +65,10 @@ pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &st
     }
 
     //  Main CYK loop: fill cells for spans of length > 1
-    for r in 2..=n { // r: span length 
-        for i in 0..=(n - r) { // i: span start 
-            let j = i + r; // j: span end 
-            
+    for r in 2..=n { // r: span length
+        for i in 0..=(n - r) { // i: span start
+            let j = i + r; // j: span end
+
             // Collect potential updates for the cell (j, i) to avoid borrow checker issues.
             let mut binary_updates: Vec<(usize, f64, BackPointer)> = Vec::new();
 
@@ -73,7 +76,7 @@ pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &st
                 let left_span_entries = &chart[m][i];
                 let right_span_entries = &chart[j][m];
 
-                // Try all binary rules A → B C
+                // Try all binary rules A -> B C
                 for (b_nt_id, b_entry) in left_span_entries.iter() {
                     if b_entry.cost.is_infinite() { continue; }
                     for (c_nt_id, c_entry) in right_span_entries.iter() {
@@ -95,7 +98,7 @@ pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &st
                 }
             }
 
-            // Now, apply the collected updates. The immutable borrows from the chart are gone.
+            // Now, apply the collected updates.
             let target_cell = &mut chart[j][i];
             for (a_nt_id, new_cost, backpointer) in binary_updates {
                 let entry = target_cell.entry(a_nt_id).or_insert_with(|| ChartEntry {
@@ -108,21 +111,22 @@ pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &st
                     entry.backpointer = Some(backpointer);
                 }
             }
-            
+
             // After the binary rules are processed, apply unary closure on the updated cell.
             apply_unary_closure(grammar, target_cell);
         }
     }
 
-    // Check if start symbol exists in highest chart cell 
+    // Check if start symbol exists in highest chart cell
     if let Some(final_entry) = chart[n][0].get(&start_symbol_id) {
         if final_entry.cost < f64::INFINITY {
             // Reconstruct tree using start symbol ID
-            return reconstruct_tree(grammar, &chart, start_symbol_id, 0, n, words);
+            let tree = reconstruct_tree(grammar, &chart, start_symbol_id, 0, n, words);
+            return Some(tree);
         }
     }
 
-    format!("(NOPARSE {})", words.join(" "))
+    None
 }
 
 fn apply_unary_closure(grammar: &Grammar, cell: &mut HashMap<usize, ChartEntry>) {
@@ -133,11 +137,11 @@ fn apply_unary_closure(grammar: &Grammar, cell: &mut HashMap<usize, ChartEntry>)
     while processed < worklist.len() {
         let b_nt_id = worklist[processed];
         processed += 1;
-        
+
         let b_entry_cost = if let Some(e) = cell.get(&b_nt_id) {
             e.cost
         } else {
-            continue; 
+            continue;
         };
 
         if b_entry_cost.is_infinite() { continue; }
@@ -159,7 +163,7 @@ fn apply_unary_closure(grammar: &Grammar, cell: &mut HashMap<usize, ChartEntry>)
                     };
                     // Insert or update the entry for A
                     cell.insert(a_nt_id, new_entry_a);
-                    
+
                     // If A is new or updated, add it to the worklist to be processed
                     if !worklist.contains(&a_nt_id) {
                         worklist.push(a_nt_id);
@@ -171,36 +175,45 @@ fn apply_unary_closure(grammar: &Grammar, cell: &mut HashMap<usize, ChartEntry>)
 }
 
 
-// rekursive reconstruction of the parse tree from the completed CYK chart
+// recursive reconstruction of the parse tree from the completed CYK chart
 fn reconstruct_tree(
     grammar: &Grammar,
     chart: &Chart,
     non_terminal_id: usize,
-    i: usize, // span start index 
-    j: usize, // span end index 
+    i: usize, // span start index
+    j: usize, // span end index
     words: &[String]
-) -> String {
+) -> Node {
     let non_terminal_str = &grammar.id_to_non_terminal[non_terminal_id];
 
-    let entry = chart[j][i].get(&non_terminal_id) 
+    let entry = chart[j][i].get(&non_terminal_id)
                      .unwrap_or_else(|| panic!("reconstruct_tree: NT ID '{}' ({}) not found in chart for span ({},{})", non_terminal_id, non_terminal_str, i, j));
 
     match entry.backpointer.as_ref().expect("reconstruct_tree: Missing backpointer") {
         BackPointer::Terminal => {
-            //  A -> word
-             format!("({} {})", non_terminal_str, words[i])
+            // A -> word
+            Node {
+                label: non_terminal_str.clone(),
+                children: vec![Node { label: words[i].clone(), children: vec![] }],
+            }
         }
         BackPointer::Unary { child_non_terminal_id } => {
             // A -> B
              let child_tree = reconstruct_tree(grammar, chart, *child_non_terminal_id, i, j, words);
-             format!("({} {})", non_terminal_str, child_tree)
+             Node {
+                 label: non_terminal_str.clone(),
+                 children: vec![child_tree],
+             }
         }
         BackPointer::Binary { split_point, left_child_non_terminal_id, right_child_non_terminal_id } => {
-            //  A -> B C
+            // A -> B C
              let m = *split_point;
              let left_tree = reconstruct_tree(grammar, chart, *left_child_non_terminal_id, i, m, words);
              let right_tree = reconstruct_tree(grammar, chart, *right_child_non_terminal_id, m, j, words);
-             format!("({} {} {})", non_terminal_str, left_tree, right_tree)
+             Node {
+                label: non_terminal_str.clone(),
+                children: vec![left_tree, right_tree],
+             }
         }
     }
 }

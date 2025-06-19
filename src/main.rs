@@ -3,10 +3,11 @@ mod structs;
 mod parser;
 mod rules;
 mod output;
-mod grammar; 
+mod grammar;
 mod cyk;
+mod transformations;
 #[cfg(test)]
-mod tests; 
+mod tests;
 
 // --- Imports ---
 use clap::Parser;
@@ -16,28 +17,27 @@ use std::collections::HashMap;
 use crate::structs::Commands;
 use crate::parser::parse_tree;
 use crate::rules::extract_rules;
-use crate::output::write_pcfg_output;
+use crate::output::{write_pcfg_output, tree_to_string};
 use crate::grammar::load_grammar;
 use crate::cyk::parse_sentence;
+use crate::transformations::{debinarise_node, collect_leaves, replace_rare_words, restore_words};
 
 
-use std::time::Instant; ////////////////////////////////////////////////////////////////////////////////////////////////////
+use std::time::Instant;
 
 // --- Main Logic ---
 fn main() -> io::Result<()> {
-    let total_time = Instant::now(); ////////////////////////////////////////////////////////////////////////////////////////////////////
-     let start_time = Instant::now(); ////////////////////////////////////////////////////////////////////////////////////////////////////
-    let cli = structs::Cli::parse(); 
+    let total_time = Instant::now();
+    let start_time = Instant::now();
+    let cli = structs::Cli::parse();
 
     match cli.command {
-        Commands::Induce(args) => { 
+        Commands::Induce(args) => {
             let mut non_lexical_rules: HashMap<String, u64> = HashMap::new();
             let mut lexical_rules: HashMap<String, u64> = HashMap::new();
 
             let stdin = io::stdin();
             let reader = stdin.lock();
-
-            // eprintln!("Reading trees from standard input and inducing PCFG...");
 
             for (line_num, line_result) in reader.lines().enumerate() {
                 match line_result {
@@ -47,9 +47,9 @@ fn main() -> io::Result<()> {
                             continue;
                         }
 
-                        match parse_tree(trimmed_line) { 
+                        match parse_tree(trimmed_line) {
                             Ok(tree) => {
-                                extract_rules(&tree, &mut non_lexical_rules, &mut lexical_rules); 
+                                extract_rules(&tree, &mut non_lexical_rules, &mut lexical_rules);
                             }
                             Err(e) => {
                                 eprintln!(
@@ -83,6 +83,12 @@ fn main() -> io::Result<()> {
             eprintln!("PCFG induction complete.");
         }
         Commands::Parse(args) => {
+            // Check for unimplemented optional flags
+            if args.smoothing || args.threshold_beam.is_some() || args.rank_beam.is_some() || args.astar_outside_weights_file.is_some() {
+                eprintln!("Error: A specified option is not implemented.");
+                std::process::exit(22);
+            }
+
             eprintln!("Loading grammar from: {:?} and {:?}", args.rules_file, args.lexicon_file);
 
             // Load Grammar
@@ -104,11 +110,11 @@ fn main() -> io::Result<()> {
             eprintln!("Reading sentences");
             let stdin = io::stdin();
             let reader = stdin.lock();
-            let duration = start_time.elapsed();////////////////////////////////////////////////////////////////////////////////////////////////////
-            eprintln!("Programm-Laufzeit: {:?}", duration); ////////////////////////////////////////////////////////////////////////////////////////////////////
+            let duration = start_time.elapsed();
+            eprintln!("Programm-Laufzeit: {:?}", duration);
 
             for (line_num, line_result) in reader.lines().enumerate() {
-                let start_time = Instant::now(); ////////////////////////////////////////////////////////////////////////////////////////////////////
+                let start_time = Instant::now();
                  let line = match line_result {
                      Ok(l) => l,
                      Err(e) => {
@@ -122,26 +128,97 @@ fn main() -> io::Result<()> {
                      continue;
                  }
 
-                 let words: Vec<String> = trimmed_line.split_whitespace().map(String::from).collect();
+                 let mut words: Vec<String> = trimmed_line.split_whitespace().map(String::from).collect();
 
                  if words.is_empty() {
                     continue;
                  }
 
-                 // Parsing using CYK 
-                 // The `initial_nonterminal` is still passed as a String. 
-                 // `parse_sentence` will handle its conversion to an ID.
-                 let parse_result = parse_sentence(&grammar, &words, &args.initial_nonterminal); //
+                 let original_words = words.clone();
 
-                 //  Print result
-                 println!("{}", parse_result);
-                 let duration = start_time.elapsed(); ////////////////////////////////////////////////////////////////////////////////////////////////////
-                 eprintln!("Satz-Laufzeit: {:?}", duration); ////////////////////////////////////////////////////////////////////////////////////////////////////
+                 // Handle --unking flag for parser
+                 if args.unking {
+                     for word in &mut words {
+                         if !grammar.terminals.contains(word) {
+                             *word = "UNK".to_string();
+                         }
+                     }
+                 }
 
+                 let parse_result = parse_sentence(&grammar, &words, &args.initial_nonterminal);
+
+                 match parse_result {
+                     Some(mut tree) => {
+                         // Restore original words if unking was active
+                         if args.unking {
+                            restore_words(&mut tree, &original_words);
+                         }
+                         println!("{}", tree_to_string(&tree));
+                     }
+                     None => {
+                         println!("(NOPARSE {})", original_words.join(" "));
+                     }
+                 }
+
+                 let duration = start_time.elapsed();
+                 eprintln!("Satz-Laufzeit: {:?}", duration);
             }
              eprintln!("Parsing complete.");
-            let duration = total_time.elapsed(); ////////////////////////////////////////////////////////////////////////////////////////////////////
-            eprintln!("Programm-Laufzeit: {:?}", duration); ////////////////////////////////////////////////////////////////////////////////////////////////////
+            let duration = total_time.elapsed();
+            eprintln!("Programm-Laufzeit: {:?}", duration);
+        }
+        Commands::Debinarise(_) => {
+            let stdin = io::stdin();
+            for line_result in stdin.lock().lines() {
+                let line = line_result?;
+                let trimmed_line = line.trim();
+                if trimmed_line.is_empty() {
+                    continue;
+                }
+                match parse_tree(trimmed_line) {
+                    Ok(tree) => {
+                        let debinarised_tree = debinarise_node(tree);
+                        println!("{}", tree_to_string(&debinarised_tree));
+                    }
+                    Err(e) => eprintln!("Error parsing tree: {:?} on line '{}'", e, trimmed_line),
+                }
+            }
+        }
+        Commands::Unk(args) => {
+            let stdin = io::stdin();
+            let lines: Vec<String> = stdin.lock().lines().collect::<Result<_, _>>()?;
+
+            let mut word_counts = HashMap::new();
+            let mut parsed_trees = Vec::new();
+
+            // First pass: parse all trees and count word frequencies
+            for line in &lines {
+                let trimmed_line = line.trim();
+                if trimmed_line.is_empty() {
+                    continue;
+                }
+                match parse_tree(trimmed_line) {
+                    Ok(tree) => {
+                        let mut leaves = Vec::new();
+                        collect_leaves(&tree, &mut leaves);
+                        for leaf in leaves {
+                            *word_counts.entry(leaf.label.clone()).or_insert(0) += 1;
+                        }
+                        parsed_trees.push(tree);
+                    }
+                    Err(e) => eprintln!("Error parsing tree: {:?} on line '{}'", e, trimmed_line),
+                }
+            }
+
+            // Second pass: replace rare words and print trees
+            for tree in &mut parsed_trees {
+                replace_rare_words(tree, &word_counts, args.threshold);
+                println!("{}", tree_to_string(tree));
+            }
+        }
+        Commands::Binarise(_) | Commands::Smooth(_) | Commands::Outside(_) => {
+            eprintln!("Error: This command is not implemented.");
+            std::process::exit(22);
         }
     }
 
