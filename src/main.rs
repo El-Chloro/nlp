@@ -20,7 +20,7 @@ use crate::rules::extract_rules;
 use crate::output::{write_pcfg_output, tree_to_string};
 use crate::grammar::load_grammar;
 use crate::cyk::parse_sentence;
-use crate::transformations::{debinarise_node, collect_leaves, replace_rare_words, restore_words};
+use crate::transformations::{debinarise_node, collect_leaves, replace_rare_words, restore_words, replace_rare_words_with_signatures, get_signature};
 
 
 use std::time::Instant;
@@ -84,9 +84,14 @@ fn main() -> io::Result<()> {
         }
         Commands::Parse(args) => {
             // Check for unimplemented optional flags
-            if args.smoothing || args.threshold_beam.is_some() || args.rank_beam.is_some() || args.astar_outside_weights_file.is_some() {
+            if args.threshold_beam.is_some() || args.rank_beam.is_some() || args.astar_outside_weights_file.is_some() {
                 eprintln!("Error: A specified option is not implemented.");
                 std::process::exit(22);
+            }
+
+            if args.unking && args.smoothing {
+                eprintln!("Error: --unking and --smoothing flags cannot be used at the same time.");
+                std::process::exit(1);
             }
 
             eprintln!("Loading grammar from: {:?} and {:?}", args.rules_file, args.lexicon_file);
@@ -136,11 +141,17 @@ fn main() -> io::Result<()> {
 
                  let original_words = words.clone();
 
-                 // Handle --unking flag for parser
+                 // Handle --unking and --smoothing flags for parser
                  if args.unking {
                      for word in &mut words {
                          if !grammar.terminals.contains(word) {
                              *word = "UNK".to_string();
+                         }
+                     }
+                 } else if args.smoothing {
+                     for (i, word) in words.iter_mut().enumerate() {
+                         if !grammar.terminals.contains(word) {
+                             *word = get_signature(word, i);
                          }
                      }
                  }
@@ -149,8 +160,8 @@ fn main() -> io::Result<()> {
 
                  match parse_result {
                      Some(mut tree) => {
-                         // Restore original words if unking was active
-                         if args.unking {
+                         // Restore original words if unking or smoothing was active
+                         if args.unking || args.smoothing {
                             restore_words(&mut tree, &original_words);
                          }
                          println!("{}", tree_to_string(&tree));
@@ -233,7 +244,39 @@ fn main() -> io::Result<()> {
                 println!("{}", tree_to_string(tree));
             }
         }
-        Commands::Smooth(_) | Commands::Outside(_) => {
+        Commands::Smooth(args) => {
+            let stdin = io::stdin();
+            let lines: Vec<String> = stdin.lock().lines().collect::<Result<_, _>>()?;
+
+            let mut word_counts = HashMap::new();
+            let mut parsed_trees = Vec::new();
+
+            // First pass: parse all trees and count word frequencies
+            for line in &lines {
+                let trimmed_line = line.trim();
+                if trimmed_line.is_empty() {
+                    continue;
+                }
+                match parse_tree(trimmed_line) {
+                    Ok(tree) => {
+                        let mut leaves = Vec::new();
+                        collect_leaves(&tree, &mut leaves);
+                        for leaf in leaves {
+                            *word_counts.entry(leaf.label.clone()).or_insert(0) += 1;
+                        }
+                        parsed_trees.push(tree);
+                    }
+                    Err(e) => eprintln!("Error parsing tree: {:?} on line '{}'", e, trimmed_line),
+                }
+            }
+
+            // Second pass: replace rare words with signatures and print trees
+            for tree in &mut parsed_trees {
+                replace_rare_words_with_signatures(tree, &word_counts, args.threshold);
+                println!("{}", tree_to_string(tree));
+            }
+        }
+        Commands::Outside(_) => {
             eprintln!("Error: This command is not implemented.");
             std::process::exit(22);
         }

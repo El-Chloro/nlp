@@ -2,7 +2,7 @@ use crate::structs::Node;
 use crate::parser::parse_tree;
 use crate::rules::extract_rules;
 use crate::output::{write_pcfg_output, tree_to_string};
-use crate::transformations::{debinarise_node, collect_leaves, replace_rare_words, restore_words, binarise_tree};
+use crate::transformations::{debinarise_node, collect_leaves, replace_rare_words, restore_words, binarise_tree, get_signature, replace_rare_words_with_signatures};
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -628,6 +628,63 @@ fn test_corpus_unking() {
     assert_eq!(tree_to_string(&tree1), "(S (A a) (B b))");
     assert_eq!(tree_to_string(&tree2), "(S (C UNK) (B b))");
     assert_eq!(tree_to_string(&tree3), "(S (A a) (D UNK))");
+}
+
+#[test]
+fn test_get_signature() {
+    // (index, word, expected_signature)
+    let cases = vec![
+        (0, "The", "UNK-SC"),
+        (1, "The", "UNK-C"),
+        (0, "THE", "UNK-AC"),
+        (5, "the", "UNK-L"),
+        (2, "tHe", "UNK-L"),
+        (1, "1990", "UNK-N-0"),
+        (3, "B2B", "UNK-AC-n"),
+        (4, "word-of-mouth", "UNK-L-H-h"),
+        (1, "...", "UNK-S-P"),
+        (2, "end.", "UNK-L-P"),
+        (3, "Mr.", "UNK-C-P"),
+        (0, "Well,", "UNK-SC-CO"),
+        (1, "4th", "UNK-L-n"),
+        (0, "1WORD", "UNK-U-n-d"),
+    ];
+
+    for (index, word, expected) in cases {
+        assert_eq!(get_signature(word, index), expected.to_string(), "Signature mismatch for word '{}' at index {}", word, index);
+    }
+}
+
+
+#[test]
+fn test_corpus_smoothing() {
+    let mut tree1 = parse_tree("(S (A apple) (B banana))").unwrap();
+    let mut tree2 = parse_tree("(S (C cherry) (B banana))").unwrap();
+    let mut tree3 = parse_tree("(S (A apple) (D date))").unwrap();
+
+    let mut word_counts = HashMap::new();
+    let trees = vec![tree1.clone(), tree2.clone(), tree3.clone()];
+    for t in &trees {
+        let mut leaves = Vec::new();
+        collect_leaves(t, &mut leaves);
+        for leaf in leaves {
+             *word_counts.entry(leaf.label.clone()).or_insert(0) += 1;
+        }
+    }
+
+    // counts: apple:2, banana:2, cherry:1, date:1
+    // threshold 1 should smooth cherry and date
+    replace_rare_words_with_signatures(&mut tree1, &word_counts, 1);
+    replace_rare_words_with_signatures(&mut tree2, &word_counts, 1);
+    replace_rare_words_with_signatures(&mut tree3, &word_counts, 1);
+    
+    // Expected signatures:
+    // cherry (index 0 in its sentence): get_signature("cherry", 0) -> "UNK-L-y"
+    // date (index 1 in its sentence): get_signature("date", 1) -> "UNK-L-e"
+    
+    assert_eq!(tree_to_string(&tree1), "(S (A apple) (B banana))");
+    assert_eq!(tree_to_string(&tree2), "(S (C UNK-L-y) (B banana))");
+    assert_eq!(tree_to_string(&tree3), "(S (A apple) (D UNK-L-e))");
 }
 
 #[test]

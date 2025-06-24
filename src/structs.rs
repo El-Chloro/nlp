@@ -95,6 +95,8 @@ pub struct UnkArgs {
 
 #[derive(Args, Debug)]
 pub struct SmoothArgs {
+    #[arg(short = 't', long = "threshold", default_value_t = 1)]
+    pub threshold: u64,
 }
 
 #[derive(Args, Debug)]
