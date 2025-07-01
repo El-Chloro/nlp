@@ -23,7 +23,61 @@ enum BackPointer {
 
 type Chart = Vec<Vec<HashMap<usize, ChartEntry>>>;
 
-pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &str) -> Option<Node> {
+/// Applies pruning to a single chart cell based on cost
+fn prune_cell(
+    cell: &mut HashMap<usize, ChartEntry>,
+    threshold_beam: Option<f64>,
+    rank_beam: Option<usize>,
+) {
+    if cell.is_empty() || (threshold_beam.is_none() && rank_beam.is_none()) {
+        return;
+    }
+
+    // 1: convert to Vec for sorting and filtering
+    let mut entries: Vec<(usize, ChartEntry)> = cell.drain().collect();
+
+    // 2:Apply Threshold Beam if specified
+    if let Some(theta) = threshold_beam {
+        // Threshold is a probability ratio [0.0, 1.0]
+        if theta >= 0.0 && theta <= 1.0 {
+            let best_cost = entries.iter()
+                .map(|(_, entry)| entry.cost)
+                .fold(f64::INFINITY, f64::min);
+            
+            if best_cost.is_finite() {
+                // Cost threshold. Prune if cost > best_cost - ln(theta)
+                let cost_threshold = if theta == 0.0 {
+                    f64::INFINITY // Pruning with theta=0 means keep everything
+                } else {
+                    best_cost - theta.ln()
+                };
+                
+                entries.retain(|(_, entry)| entry.cost <= cost_threshold);
+            }
+        }
+    }
+
+    // 3: apply Rank Beam if specified
+    if let Some(k) = rank_beam {
+        if k > 0 && entries.len() > k {
+            // Sort by cost (ascending). Using partial_sort would be more efficient,
+            // but full sort is simpler and correct.
+            entries.sort_unstable_by(|(_, a), (_, b)| a.cost.partial_cmp(&b.cost).unwrap_or(std::cmp::Ordering::Equal));
+            entries.truncate(k);
+        }
+    }
+
+    // 4: Refill the cell from the pruned entries
+    *cell = entries.into_iter().collect();
+}
+
+pub fn parse_sentence(
+    grammar: &Grammar,
+    words: &[String],
+    start_symbol_str: &str,
+    threshold_beam: Option<f64>,
+    rank_beam: Option<usize>,
+) -> Option<Node> {
     let n = words.len();
     if n == 0 {
         return None;
@@ -62,6 +116,7 @@ pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &st
         }
 
         apply_unary_closure(grammar, cell);
+        prune_cell(cell, threshold_beam, rank_beam);
     }
 
     //  Main CYK loop: fill cells for spans of length > 1
@@ -114,6 +169,7 @@ pub fn parse_sentence(grammar: &Grammar, words: &[String], start_symbol_str: &st
 
             // After the binary rules are processed, apply unary closure on the updated cell.
             apply_unary_closure(grammar, target_cell);
+            prune_cell(target_cell, threshold_beam, rank_beam);
         }
     }
 

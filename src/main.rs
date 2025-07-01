@@ -84,7 +84,7 @@ fn main() -> io::Result<()> {
         }
         Commands::Parse(args) => {
             // Check for unimplemented optional flags
-            if args.threshold_beam.is_some() || args.rank_beam.is_some() || args.astar_outside_weights_file.is_some() {
+            if args.astar_outside_weights_file.is_some() {
                 eprintln!("Error: A specified option is not implemented.");
                 std::process::exit(22);
             }
@@ -156,7 +156,13 @@ fn main() -> io::Result<()> {
                      }
                  }
 
-                 let parse_result = parse_sentence(&grammar, &words, &args.initial_nonterminal);
+                 let parse_result = parse_sentence(
+                    &grammar,
+                    &words,
+                    &args.initial_nonterminal,
+                    args.threshold_beam,
+                    args.rank_beam,
+                );
 
                  match parse_result {
                      Some(mut tree) => {

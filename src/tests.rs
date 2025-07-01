@@ -494,7 +494,7 @@ fn cyk_parse_simple_sentence() {
     let sentence: Vec<String> = vec!["the".to_string(), "dog".to_string(), "ran".to_string()];
     let expected_tree_str = "(S (NP (DT the) (NN dog)) (VP (V ran)))";
 
-    let result_node = parse_sentence(&grammar, &sentence, "S").unwrap();
+    let result_node = parse_sentence(&grammar, &sentence, "S", None, None).unwrap();
     assert_eq!(tree_to_string(&result_node), expected_tree_str);
 }
 
@@ -503,7 +503,7 @@ fn cyk_parse_simple_sentence() {
 fn cyk_parse_longer_sentence_ambiguous() {
      let grammar = setup_test_grammar();
      let sentence: Vec<String> = vec!["the".to_string(), "man".to_string(), "saw".to_string(), "a".to_string(), "dog".to_string(), "with".to_string(), "a".to_string(), "telescope".to_string()];
-     let result_node = parse_sentence(&grammar, &sentence, "S").unwrap();
+     let result_node = parse_sentence(&grammar, &sentence, "S", None, None).unwrap();
      // VP attachment has lower cost (-ln(0.5)) than NP attachment (-ln(0.2)), so it should be preferred.
      let expected_tree_vp_attach = "(S (NP (DT the) (NN man)) (VP (VP (V saw) (NP (DT a) (NN dog))) (PP (P with) (NP (DT a) (NN telescope)))))";
      assert_eq!(tree_to_string(&result_node), expected_tree_vp_attach);
@@ -514,7 +514,7 @@ fn cyk_parse_longer_sentence_ambiguous() {
 fn cyk_parse_no_parse() {
     let grammar = setup_test_grammar();
     let sentence = vec!["the".to_string(), "cat".to_string(), "barked".to_string()];
-    let result = parse_sentence(&grammar, &sentence, "S");
+    let result = parse_sentence(&grammar, &sentence, "S", None, None);
     assert!(result.is_none());
 }
 
@@ -522,9 +522,69 @@ fn cyk_parse_no_parse() {
 fn cyk_parse_empty_sentence() {
     let grammar = setup_test_grammar();
     let sentence: Vec<String> = vec![];
-    let result = parse_sentence(&grammar, &sentence, "S");
+    let result = parse_sentence(&grammar, &sentence, "S", None, None);
     assert!(result.is_none());
 }
+
+// --- Tests for CYK Pruning ---
+
+#[test]
+fn cyk_pruning_rank_beam_selects_best() {
+    let mut grammar = setup_test_grammar();
+    // Ensure the less-preferred rule for NP attachment is very costly
+    let np_id = grammar.non_terminal_to_id["NP"];
+    let pp_id = grammar.non_terminal_to_id["PP"];
+    let high_cost = -0.001_f64.ln();
+    for rule in grammar.binary_rules_by_children.get_mut(&(np_id, pp_id)).unwrap() {
+        if rule.lhs_id == np_id {
+            rule.cost = high_cost;
+        }
+    }
+    
+    let sentence: Vec<String> = vec!["the".to_string(), "man".to_string(), "saw".to_string(), "a".to_string(), "dog".to_string(), "with".to_string(), "a".to_string(), "telescope".to_string()];
+    
+    let result_node = parse_sentence(&grammar, &sentence, "S", None, Some(1)).unwrap();
+    let expected_tree_vp_attach = "(S (NP (DT the) (NN man)) (VP (VP (V saw) (NP (DT a) (NN dog))) (PP (P with) (NP (DT a) (NN telescope)))))";
+    assert_eq!(tree_to_string(&result_node), expected_tree_vp_attach);
+}
+
+#[test]
+fn cyk_pruning_threshold_beam_selects_best() {
+    let grammar = setup_test_grammar();
+    let sentence: Vec<String> = vec!["the".to_string(), "man".to_string(), "saw".to_string(), "a".to_string(), "dog".to_string(), "with".to_string(), "a".to_string(), "telescope".to_string()];
+    
+    let threshold = 0.5;
+
+    let result_node = parse_sentence(&grammar, &sentence, "S", Some(threshold), None).unwrap();
+    let expected_tree_vp_attach = "(S (NP (DT the) (NN man)) (VP (VP (V saw) (NP (DT a) (NN dog))) (PP (P with) (NP (DT a) (NN telescope)))))";
+    assert_eq!(tree_to_string(&result_node), expected_tree_vp_attach);
+}
+
+#[test]
+fn cyk_pruning_causes_no_parse() {
+    let mut grammar = setup_test_grammar();
+    // Remove the preferred VP->VP,PP rule, so only the costly NP->NP,PP rule can form the attachment
+    let vp_id = grammar.non_terminal_to_id["VP"];
+    let pp_id = grammar.non_terminal_to_id["PP"];
+    grammar.binary_rules_by_children.remove(&(vp_id, pp_id));
+
+    let sentence: Vec<String> = vec!["the".to_string(), "man".to_string(), "saw".to_string(), "a".to_string(), "dog".to_string(), "with".to_string(), "a".to_string(), "telescope".to_string()];
+    
+    let expected_tree_np_attach = "(S (NP (DT the) (NN man)) (VP (V saw) (NP (NP (DT a) (NN dog)) (PP (P with) (NP (DT a) (NN telescope))))))";
+    let result_node_no_pruning = parse_sentence(&grammar, &sentence, "S", None, None).unwrap();
+    assert_eq!(tree_to_string(&result_node_no_pruning), expected_tree_np_attach);
+
+    //add a cheap but "wrong" rule -> NP attachment needs to be built
+    let x = grammar.get_or_intern_non_terminal("X");
+    let y = grammar.get_or_intern_non_terminal("Y");
+    let np_id = grammar.non_terminal_to_id["NP"];
+    let pp_id = grammar.non_terminal_to_id["PP"];
+    grammar.add_binary_rule(BinaryRule { lhs_id: x, rhs1_id: np_id, rhs2_id: pp_id, cost: 0.1 }); 
+    
+    let result_with_pruning = parse_sentence(&grammar, &sentence, "S", None, Some(1));
+    assert!(result_with_pruning.is_none(), "Aggressive pruning should lead to no parse.");
+}
+
 
 // --- Tests for Transformations (Binarise, Debinarise, Unk) ---
 
@@ -710,7 +770,7 @@ fn test_parser_unking_and_word_restoration() {
 
     // The logic is now inside the main function, but we can test the components.
     // 1. Parse with "UNK"
-    let mut result_tree = parse_sentence(&grammar, &words_for_parser, "S").unwrap();
+    let mut result_tree = parse_sentence(&grammar, &words_for_parser, "S", None, None).unwrap();
     let unked_tree_str = tree_to_string(&result_tree);
     // Check that the parse tree contains UNK
     assert!(unked_tree_str.contains("(NN UNK)"));
