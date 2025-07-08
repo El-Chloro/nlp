@@ -610,6 +610,7 @@ fn test_binarise_no_change_for_binary_tree() {
 #[test]
 fn test_binarise_vertical_markovization() {
     // v=2, h=999. Ancestor labels should be prepended.
+    // Pre-terminals are not changed.
     let original_str = "(S (NP (NNP John)) (VP (V saw) (NP (DT the) (NN dog))))";
     let tree = parse_tree(original_str).unwrap();
     let binarised_tree = binarise_tree(&tree, 999, 2);
@@ -700,7 +701,8 @@ fn test_get_signature() {
         (0, "THE", "UNK-AC"),
         (5, "the", "UNK-L"),
         (2, "tHe", "UNK-L"),
-        (1, "1990", "UNK-N-0"),
+        (1, "1990", "UNK-S-N"), // Corrected
+        (2, "1984", "UNK-S-N"), // Added: No suffix for numbers
         (3, "B2B", "UNK-AC-n"),
         (4, "word-of-mouth", "UNK-L-H-h"),
         (1, "...", "UNK-S-P"),
@@ -722,9 +724,10 @@ fn test_corpus_smoothing() {
     let mut tree1 = parse_tree("(S (A apple) (B banana))").unwrap();
     let mut tree2 = parse_tree("(S (C cherry) (B banana))").unwrap();
     let mut tree3 = parse_tree("(S (A apple) (D date))").unwrap();
+    let mut tree4 = parse_tree("(S (E 12345) (F apple))").unwrap(); // Added for number smoothing
 
     let mut word_counts = HashMap::new();
-    let trees = vec![tree1.clone(), tree2.clone(), tree3.clone()];
+    let trees = vec![tree1.clone(), tree2.clone(), tree3.clone(), tree4.clone()];
     for t in &trees {
         let mut leaves = Vec::new();
         collect_leaves(t, &mut leaves);
@@ -733,19 +736,22 @@ fn test_corpus_smoothing() {
         }
     }
 
-    // counts: apple:2, banana:2, cherry:1, date:1
-    // threshold 1 should smooth cherry and date
+    // counts: apple:3, banana:2, cherry:1, date:1, 12345:1
+    // threshold 1 should smooth cherry, date, and 12345
     replace_rare_words_with_signatures(&mut tree1, &word_counts, 1);
     replace_rare_words_with_signatures(&mut tree2, &word_counts, 1);
     replace_rare_words_with_signatures(&mut tree3, &word_counts, 1);
+    replace_rare_words_with_signatures(&mut tree4, &word_counts, 1);
     
     // Expected signatures:
-    // cherry (index 0 in its sentence): get_signature("cherry", 0) -> "UNK-L-y"
-    // date (index 1 in its sentence): get_signature("date", 1) -> "UNK-L-e"
+    // cherry (index 0): "UNK-L-y"
+    // date (index 1): "UNK-L-e"
+    // 12345 (index 0): "UNK-S-N"
     
     assert_eq!(tree_to_string(&tree1), "(S (A apple) (B banana))");
     assert_eq!(tree_to_string(&tree2), "(S (C UNK-L-y) (B banana))");
     assert_eq!(tree_to_string(&tree3), "(S (A apple) (D UNK-L-e))");
+    assert_eq!(tree_to_string(&tree4), "(S (E UNK-S-N) (F apple))");
 }
 
 #[test]

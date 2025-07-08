@@ -114,15 +114,15 @@ pub fn get_signature(word: &str, index: usize) -> String {
     }
 
     let mut signature = "UNK".to_string();
-    let all_digit = !word.is_empty() && word.chars().all(|c| c.is_ascii_digit());
+    let has_letter = word.chars().any(|c| c.is_alphabetic());
+    let all_digit = !has_letter && word.chars().any(|c| c.is_ascii_digit());
 
     if all_digit {
-        signature.push_str("-N");
+        signature.push_str("-S-N"); // Symbol + Number for words with no letters
     } else {
-        // Not all digits, so apply letter-based and contains-digit logic
+        // Not all digits, so apply letter-based logic
         let first_char = word.chars().next().unwrap();
         let has_lower = word.chars().any(|c| c.is_lowercase());
-        let has_letter = word.chars().any(|c| c.is_alphabetic());
 
         let letter_suffix = if first_char.is_uppercase() && !has_lower {
             "-AC" // All letters are uppercase, and it starts with a capital.
@@ -160,8 +160,8 @@ pub fn get_signature(word: &str, index: usize) -> String {
         signature.push_str("-CO"); // Comma
     }
     
-    // wordSuffix
-    if word.len() > 3 {
+    // wordSuffix (only if it's not a pure number)
+    if !all_digit && word.len() > 3 {
         if let Some(last_char) = word.chars().last() {
             if last_char.is_alphanumeric() {
                 signature.push_str("-");
