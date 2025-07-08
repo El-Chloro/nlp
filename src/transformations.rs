@@ -56,8 +56,8 @@ fn markovize_recursive(node: &Node, ancestors: &[String], h: usize, v: usize) ->
             .take(num_ancestors_to_take)
             .map(|s| s.as_str())
             .collect::<Vec<_>>()
-            .join("^");
-        new_label = format!("{}^{}", parent_labels_part, new_label);
+            .join(",");
+        new_label = format!("{}^<{}>", new_label, parent_labels_part);
     }
     
     // For recursive calls, the original label of the current node
@@ -82,14 +82,14 @@ fn markovize_recursive(node: &Node, ancestors: &[String], h: usize, v: usize) ->
     else {
         let markovized_t1 = markovize_recursive(&node.children[0], &new_ancestors, h, v);
 
-        // Create the label for the new intermediate node: σ' ← originalLabel(σ)|⟨label of t2, …, label of th+1⟩
+        // Create the label for the new intermediate node: σ' ← originalLabel(σ)|<label of t2, …, label of th+1>
         let intermediate_label_rhs: Vec<&str> = node.children[1..]
             .iter()
             .take(h)
             .map(|child| child.label.as_str())
             .collect();
         
-        let intermediate_label = format!("{}|{}", node.label, intermediate_label_rhs.join(","));
+        let intermediate_label = format!("{}|<{}>", node.label, intermediate_label_rhs.join(","));
         
         let intermediate_node = Node {
             label: intermediate_label,

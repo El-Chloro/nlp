@@ -594,7 +594,7 @@ fn test_binarise_simple_structure() {
     let original_str = "(A (B b) (C c) (D d))";
     let tree = parse_tree(original_str).unwrap();
     let binarised_tree = binarise_tree(&tree, 999, 1);
-    let expected_str = "(A (B b) (A|C,D (C c) (D d)))";
+    let expected_str = "(A (B b) (A|<C,D> (C c) (D d)))";
     assert_eq!(tree_to_string(&binarised_tree), expected_str);
 }
 
@@ -613,7 +613,8 @@ fn test_binarise_vertical_markovization() {
     let original_str = "(S (NP (NNP John)) (VP (V saw) (NP (DT the) (NN dog))))";
     let tree = parse_tree(original_str).unwrap();
     let binarised_tree = binarise_tree(&tree, 999, 2);
-    let expected_str = "(S (S^NP (NNP John)) (S^VP (V saw) (VP^NP (DT the) (NN dog))))";
+    // With v=2, we only take v-1=1 ancestor. The NP under VP has ancestors [VP, S], so it correctly takes just "VP".
+    let expected_str = "(S (NP^<S> (NNP John)) (VP^<S> (V saw) (NP^<VP> (DT the) (NN dog))))";
     assert_eq!(tree_to_string(&binarised_tree), expected_str);
 }
 
@@ -623,7 +624,7 @@ fn test_binarise_horizontal_markovization() {
     let original_str = "(S (A a) (B b) (C c) (D d))";
     let tree = parse_tree(original_str).unwrap();
     let binarised_tree = binarise_tree(&tree, 1, 1);
-    let expected_str = "(S (A a) (S|B (B b) (S|B|C (C c) (D d))))";
+    let expected_str = "(S (A a) (S|<B> (B b) (S|<B>|<C> (C c) (D d))))";
     assert_eq!(tree_to_string(&binarised_tree), expected_str);
 }
 
@@ -633,7 +634,7 @@ fn test_binarise_combined_markovization() {
     let original_str = "(S (A a) (B b) (C c))";
     let tree = parse_tree(original_str).unwrap();
     let binarised_tree = binarise_tree(&tree, 1, 2);
-    let expected_str = "(S (A a) (S^S|B (B b) (C c)))";
+    let expected_str = "(S (A a) (S|<B>^<S> (B b) (C c)))";
     assert_eq!(tree_to_string(&binarised_tree), expected_str);
 }
 
@@ -648,7 +649,7 @@ fn test_binarise_preterminal_is_unchanged() {
 
 #[test]
 fn test_debinarise_simple() {
-    let binarized_str = "(S (NP (DT the) (NN|JJ (JJ big) (NN dog))) (VP|V (V ran)))";
+    let binarized_str = "(S (NP (DT the) (NN|<JJ> (JJ big) (NN dog))) (VP|<V> (V ran)))";
     let binarized_tree = parse_tree(binarized_str).unwrap();
     let debinarised_tree = debinarise_node(binarized_tree);
     let expected_str = "(S (NP (DT the) (JJ big) (NN dog)) (V ran))";
