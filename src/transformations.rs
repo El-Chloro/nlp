@@ -114,54 +114,54 @@ pub fn get_signature(word: &str, index: usize) -> String {
     }
 
     let mut signature = "UNK".to_string();
+    let is_all_digit = !word.is_empty() && word.chars().all(|c| c.is_ascii_digit());
     let has_letter = word.chars().any(|c| c.is_alphabetic());
-    let all_digit = !has_letter && word.chars().any(|c| c.is_ascii_digit());
+    let has_digit = word.chars().any(|c| c.is_ascii_digit());
 
-    if all_digit {
-        signature.push_str("-S-N"); // Symbol + Number for words with no letters
-    } else {
-        // Not all digits, so apply letter-based logic
+    // --- Main classification ---
+    if is_all_digit {
+        // Pure number
+        signature.push_str("-S-N");
+    } else if has_letter {
+        // Contains letters, e.g. "The", "B2B"
         let first_char = word.chars().next().unwrap();
         let has_lower = word.chars().any(|c| c.is_lowercase());
-
         let letter_suffix = if first_char.is_uppercase() && !has_lower {
-            "-AC" // All letters are uppercase, and it starts with a capital.
+            "-AC" // All letters are uppercase
         } else if first_char.is_uppercase() && index == 0 {
             "-SC" // Sentence Capitalized
         } else if first_char.is_uppercase() {
             "-C"  // Capitalized
         } else if has_lower {
             "-L"  // Lowercase
-        } else if has_letter {
-            "-U"  // Unusual (e.g., no lowercase, but doesn't start with a capital, like '1WORD' or 'iPod')
         } else {
-            "-S"  // Symbol
+            "-U" // Unusual
         };
         signature.push_str(letter_suffix);
-
-        let has_digit = word.chars().any(|c| c.is_ascii_digit());
         if has_digit {
-            signature.push_str("-n");
+            signature.push_str("-n"); // Add -n for words with letters AND digits
+        }
+    } else {
+        // No letters, and not a pure number
+        signature.push_str("-S");
+        if has_digit {
+            signature.push_str("-n"); // Add -n for symbol words with digits
         }
     }
 
-    // dashSuffix
+    // --- Suffixes for all cases ---
     if word.contains('-') {
-        signature.push_str("-H"); // Hyphen
+        signature.push_str("-H");
+    }
+    if word.contains('.') {
+        signature.push_str("-P");
+    }
+    if word.contains(',') {
+        signature.push_str("-CO");
     }
 
-    // periodSuffix
-    if word.contains('.') {
-        signature.push_str("-P"); // Period
-    }
-    
-    // commaSuffix (-CO instead of -C to avoid collision with Capitalized)
-    if word.contains(',') {
-        signature.push_str("-CO"); // Comma
-    }
-    
-    // wordSuffix (only if it's not a pure number)
-    if !all_digit && word.len() > 3 {
+    // Word suffix does not apply to pure numbers
+    if !is_all_digit && word.len() > 3 {
         if let Some(last_char) = word.chars().last() {
             if last_char.is_alphanumeric() {
                 signature.push_str("-");

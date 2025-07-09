@@ -701,8 +701,10 @@ fn test_get_signature() {
         (0, "THE", "UNK-AC"),
         (5, "the", "UNK-L"),
         (2, "tHe", "UNK-L"),
-        (1, "1990", "UNK-S-N"), // Corrected
-        (2, "1984", "UNK-S-N"), // Added: No suffix for numbers
+        (1, "1990", "UNK-S-N"),
+        (2, "1984", "UNK-S-N"),
+        (0, "9.8", "UNK-S-n-P"),
+        (0, "-9.8", "UNK-S-n-H-P"), 
         (3, "B2B", "UNK-AC-n"),
         (4, "word-of-mouth", "UNK-L-H-h"),
         (1, "...", "UNK-S-P"),
@@ -724,7 +726,7 @@ fn test_corpus_smoothing() {
     let mut tree1 = parse_tree("(S (A apple) (B banana))").unwrap();
     let mut tree2 = parse_tree("(S (C cherry) (B banana))").unwrap();
     let mut tree3 = parse_tree("(S (A apple) (D date))").unwrap();
-    let mut tree4 = parse_tree("(S (E 12345) (F apple))").unwrap(); // Added for number smoothing
+    let mut tree4 = parse_tree("(S (E 12345) (F apple))").unwrap();
 
     let mut word_counts = HashMap::new();
     let trees = vec![tree1.clone(), tree2.clone(), tree3.clone(), tree4.clone()];
