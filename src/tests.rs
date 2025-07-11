@@ -625,7 +625,7 @@ fn test_binarise_horizontal_markovization() {
     let original_str = "(S (A a) (B b) (C c) (D d))";
     let tree = parse_tree(original_str).unwrap();
     let binarised_tree = binarise_tree(&tree, 1, 1);
-    let expected_str = "(S (A a) (S|<B> (B b) (S|<B>|<C> (C c) (D d))))";
+    let expected_str = "(S (A a) (S|<B> (B b) (S|<C> (C c) (D d))))";
     assert_eq!(tree_to_string(&binarised_tree), expected_str);
 }
 
@@ -640,6 +640,15 @@ fn test_binarise_combined_markovization() {
 }
 
 #[test]
+fn test_binarise_ancestors_of_intermediate_children() {
+    let original_str = "(ROOT (S (A (AA aa)) (B b) (C c)))";
+    let tree = parse_tree(original_str).unwrap();
+    let binarised_tree = binarise_tree(&tree, 1, 2);
+    let expected_str = "(ROOT (S^<ROOT> (A^<S> (AA aa)) (S|<B>^<S> (B b) (C c))))";
+    assert_eq!(tree_to_string(&binarised_tree), expected_str);
+}
+
+#[test]
 fn test_binarise_preterminal_is_unchanged() {
     // A pre-terminal node like (DT the) should not be modified at all.
     let original_str = "(DT the)";
@@ -650,7 +659,7 @@ fn test_binarise_preterminal_is_unchanged() {
 
 #[test]
 fn test_debinarise_simple() {
-    let binarized_str = "(S (NP (DT the) (NN|<JJ> (JJ big) (NN dog))) (VP|<V> (V ran)))";
+    let binarized_str = "(S^<ROOT> (NP^<S> (DT the) (NN|<JJ>^<NP,S> (JJ big) (NN dog))) (VP|<V>^<S> (V ran)))";
     let binarized_tree = parse_tree(binarized_str).unwrap();
     let debinarised_tree = debinarise_node(binarized_tree);
     let expected_str = "(S (NP (DT the) (JJ big) (NN dog)) (V ran))";
@@ -696,11 +705,11 @@ fn test_corpus_unking() {
 fn test_get_signature() {
     // (index, word, expected_signature)
     let cases = vec![
-        (0, "The", "UNK-SC"),
-        (1, "The", "UNK-C"),
+        (0, "The", "UNK-SC-e"),
+        (1, "The", "UNK-C-e"),
         (0, "THE", "UNK-AC"),
-        (5, "the", "UNK-L"),
-        (2, "tHe", "UNK-L"),
+        (5, "the", "UNK-L-e"),
+        (2, "tHe", "UNK-L-e"),
         (1, "1990", "UNK-S-N"),
         (2, "1984", "UNK-S-N"),
         (0, "9.8", "UNK-S-n-P"),

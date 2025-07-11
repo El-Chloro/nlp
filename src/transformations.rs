@@ -22,11 +22,14 @@ pub fn debinarise_node(node: Node) -> Node {
         }
     }
 
+    let final_label = node.label.split('^').next().unwrap_or(&node.label).to_string();
+
     Node {
-        label: node.label,
+        label: final_label,
         children: new_children,
     }
 }
+
 
 /// Binarizes a tree using vertical and horizontal Markovization.
 pub fn binarise_tree(root: &Node, h: usize, v: usize) -> Node {
@@ -62,7 +65,10 @@ fn markovize_recursive(node: &Node, ancestors: &[String], h: usize, v: usize) ->
     
     // For recursive calls, the original label of the current node
     // is prepended to the list of ancestors for the children.
-    let mut new_ancestors = vec![node.label.clone()];
+    let original_label_for_ancestry = node.label.split('|').next().unwrap_or(&node.label)
+                                               .split('^').next().unwrap_or(&node.label)
+                                               .to_string();
+    let mut new_ancestors = vec![original_label_for_ancestry];
     new_ancestors.extend_from_slice(ancestors);
     
     // Case: k ≤ 2. The node is already unary or binary.
@@ -83,13 +89,14 @@ fn markovize_recursive(node: &Node, ancestors: &[String], h: usize, v: usize) ->
         let markovized_t1 = markovize_recursive(&node.children[0], &new_ancestors, h, v);
 
         // Create the label for the new intermediate node: σ' ← originalLabel(σ)|<label of t2, …, label of th+1>
+        let original_label_base = node.label.split('|').next().unwrap_or(&node.label);
         let intermediate_label_rhs: Vec<&str> = node.children[1..]
             .iter()
             .take(h)
             .map(|child| child.label.as_str())
             .collect();
         
-        let intermediate_label = format!("{}|<{}>", node.label, intermediate_label_rhs.join(","));
+        let intermediate_label = format!("{}|<{}>", original_label_base, intermediate_label_rhs.join(","));
         
         let intermediate_node = Node {
             label: intermediate_label,
@@ -107,6 +114,7 @@ fn markovize_recursive(node: &Node, ancestors: &[String], h: usize, v: usize) ->
     }
 }
 
+
 /// Generates a signature for a given word based on its orthographic features.
 pub fn get_signature(word: &str, index: usize) -> String {
     if word.is_empty() {
@@ -117,13 +125,12 @@ pub fn get_signature(word: &str, index: usize) -> String {
     let is_all_digit = !word.is_empty() && word.chars().all(|c| c.is_ascii_digit());
     let has_letter = word.chars().any(|c| c.is_alphabetic());
     let has_digit = word.chars().any(|c| c.is_ascii_digit());
+    let mut main_class = "";
 
     // --- Main classification ---
     if is_all_digit {
-        // Pure number
         signature.push_str("-S-N");
     } else if has_letter {
-        // Contains letters, e.g. "The", "B2B"
         let first_char = word.chars().next().unwrap();
         let has_lower = word.chars().any(|c| c.is_lowercase());
         let letter_suffix = if first_char.is_uppercase() && !has_lower {
@@ -137,15 +144,15 @@ pub fn get_signature(word: &str, index: usize) -> String {
         } else {
             "-U" // Unusual
         };
+        main_class = letter_suffix;
         signature.push_str(letter_suffix);
         if has_digit {
             signature.push_str("-n"); // Add -n for words with letters AND digits
         }
     } else {
-        // No letters, and not a pure number
         signature.push_str("-S");
         if has_digit {
-            signature.push_str("-n"); // Add -n for symbol words with digits
+            signature.push_str("-n"); 
         }
     }
 
@@ -159,12 +166,16 @@ pub fn get_signature(word: &str, index: usize) -> String {
     if word.contains(',') {
         signature.push_str("-CO");
     }
-
+    
+    let is_all_caps = main_class == "-AC";
+    let last_char_is_letter = word.chars().last().map_or(false, |c| c.is_alphabetic());
+    
     // Word suffix does not apply to pure numbers
-    if !is_all_digit && word.len() > 3 {
-        if let Some(last_char) = word.chars().last() {
-            if last_char.is_alphanumeric() {
-                signature.push_str("-");
+    if has_letter && !is_all_caps && word.len() >= 3 && last_char_is_letter {
+        // Exclude words like '4th' (-L-n) but include '1WORD' (-U-n)
+        if !has_digit || main_class == "-U" {
+            if let Some(last_char) = word.chars().last() {
+                signature.push('-');
                 signature.push(last_char.to_ascii_lowercase());
             }
         }
